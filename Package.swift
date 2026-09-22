@@ -24,6 +24,10 @@ let package = Package(
                 .copy("Resources/run.pl")
             ]
         ),
+        .testTarget(
+            name: "MediaRemoteAdapterTests",
+            dependencies: ["MediaRemoteAdapter"]
+        ),
         .target(
             name: "CIMediaRemote",
             dependencies: [],
