@@ -2,8 +2,9 @@
 import PackageDescription
 
 // macOS 27 floor (2026-09-14; was .v13): follows the ZoneTilerWM root package so the adapter's
-// ObjC/C sources compile against the same deployment target as every consumer. Branch name
-// `swift6-macos13` is historical (kept to avoid pin churn); tools stay 6.3, Swift 6 mode.
+// ObjC/C sources compile against the same deployment target as every consumer. This floor is
+// FORK-ONLY and lives on `main`; `swift6-macos13` is the upstream PR branch (ejbills#7) and keeps
+// the macOS 13 floor upstream can accept. Tools stay 6.3, Swift 6 mode.
 let package = Package(
     name: "MediaRemoteAdapter",
     platforms: [

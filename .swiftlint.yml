@@ -1,0 +1,5 @@
+# SwiftLint configuration. Default rules, strict (the gate runs --strict). Existing violations are
+# frozen in .swiftlint-baseline.json as a shrink-only ratchet (gates_of_heck GOH_SWIFT_LINT_BASELINE):
+# most sit in upstream-owned code, which the fork does not restyle while it still merges upstream.
+excluded:
+  - .build
