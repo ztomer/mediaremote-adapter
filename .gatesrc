@@ -17,3 +17,5 @@ GOH_LINE_EXCLUDE='^Sources/CIMediaRemote/MediaRemoteAdapter\.m$'
 # Shrink-only lint ratchet, seeded 2026-10-12 with the 29 violations present at install. Re-record
 # (swiftlint lint --strict --write-baseline .swiftlint-baseline.json) only to SHRINK it.
 GOH_SWIFT_LINT_BASELINE=.swiftlint-baseline.json
+# The exemption above is not an exemption from every bound: its ceiling is its size today.
+GOH_LINE_BASELINE=.line-baseline

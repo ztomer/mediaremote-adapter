@@ -1,0 +1,3 @@
+# Shrink-only line ceilings for files exempted from the 500-line cap (GOH_LINE_EXCLUDE).
+# Lower a number when a split lands; never raise one to absorb growth.
+578	Sources/CIMediaRemote/MediaRemoteAdapter.m

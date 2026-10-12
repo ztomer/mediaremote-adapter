@@ -30,7 +30,8 @@ because `main` contains it.
   `.swiftlint-baseline.json`, a shrink-only ratchet seeded with the 29 violations present at install
   (most in upstream-owned `MediaController.swift`/`TrackInfo.swift`).
   `Sources/CIMediaRemote/MediaRemoteAdapter.m` (578 lines, upstream-owned) is excluded from the
-  500-line cap in `.gatesrc`, with the reason. No coverage floor yet.
+  500-line cap in `.gatesrc`, with the reason, and held to a shrink-only ceiling of 578 in
+  `.line-baseline` (proven red at 577). No coverage floor yet.
 - `MediaController` (437 lines), `TrackInfo` decoding, the ObjC shim and `run.pl` have no tests.
 
 ## Rulings
