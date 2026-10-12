@@ -10,7 +10,7 @@ GOH_SWIFT_MODE=spm
 # GOH_SWIFT_SCHEME=MyAppTests
 # GOH_SWIFT_COV_MIN=95
 # GOH_MAX_SCRATCH_GB=25 etc. live OUTSIDE the gates since v0.8.0 — set them
-# in the environment for ~/Projects/scripts/bin/disk_hygiene.sh, not here.
+# in the environment for the scripts repo's bin/disk_hygiene.sh, not here.
 # Upstream-owned (ejbills/mediaremote-adapter): splitting it in the fork would turn every upstream
 # merge of this file into a hand-merge. Remove when upstream splits it or the fork stops merging.
 GOH_LINE_EXCLUDE='^Sources/CIMediaRemote/MediaRemoteAdapter\.m$'
