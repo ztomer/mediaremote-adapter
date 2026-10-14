@@ -49,8 +49,8 @@ Exit: G0.1 proven both ways; `git push` passes the pre-push gate.
   *Accept:* the `every scanner read its declared subject` step prints no `[subject] ... declare
   no floor` line; raise `GOH_EMOJI_MIN_FILES` to 33 and that step goes red naming the key, the
   floor and the count; restore it, green. Size S.
-- **G0.2 Push** the hooks commit (`66441aa`) and G0.1 to `origin/main` (fast-forward only).
-  Size S.
+- **G0.2 Push** G0.1 to `origin/main` (fast-forward only; the hooks commit `66441aa` and this
+  plan, `c74559e`, are pushed and passed the pre-push gate). Size S.
 
 ## Phase 1: branch topology (size S)
 
