@@ -20,7 +20,8 @@ history: a pinned revision must stay reachable on the remote. Closed work is in 
   (40 s): structural + SwiftLint `--strict` against the shrink-only `.swiftlint-baseline.json`
   (29 at install, mostly upstream-owned) + cold build/test with warnings as errors.
   `Sources/CIMediaRemote/MediaRemoteAdapter.m` (578 lines, upstream-owned) is excluded from the
-  500-line cap and held to 578 by `.line-baseline`. No scanner floors and no coverage floor yet.
+  500-line cap and held to 578 by `.line-baseline`. Scanner floors set (`f6d0631`); no coverage
+  floor yet.
 - `MediaController` (437 lines), `TrackInfo` decoding, the ObjC shim and `run.pl` have no tests.
 
 ## Rulings
@@ -34,23 +35,10 @@ history: a pinned revision must stay reachable on the remote. Closed work is in 
 - `swift6-macos13` may be rewritten (force-with-lease) only while `main` contains every commit a
   consumer pins. Never leave a pinned revision unreachable on the remote.
 
-## Phase 0: wire in goh 0.27.0 (size S, one short session)
+## Phase 0: wire in goh 0.27.0 (closed)
 
-Goal: `tools/gate.sh --full` green at HEAD with every scanner floor set, and pushed.
-Exit: G0.1 proven both ways; `git push` passes the pre-push gate.
-
-- **G0.1 Set the scanner floors.** The structural gate's last step prints, measured 2026-10-14 at
-  `66441aa`: `[subject] 10 scanner(s) declare no floor in .gatesrc ... this run read:
-  GOH_EMOJI_MIN_FILES=32 GOH_CONFLICT_MARKERS_MIN_FILES=32 GOH_FILE_LENGTH_MIN_FILES=11
-  GOH_SECRETS_MIN_FILES=32 GOH_SHELL_LINT_MIN_FILES=1 GOH_EARLY_EXIT_PIPE_MIN_FILES=6
-  GOH_DEAD_AFTER_EXEC_MIN_FILES=6 GOH_BARE_HOOK_INDEX_MIN_FILES=6 GOH_BARE_PYTHON_MIN_FILES=6
-  GOH_MD_LINKS_MIN_LINKS=1`. Paste each into `.gatesrc` at its count (a repo this small has no
-  slack to give).
-  *Accept:* the `every scanner read its declared subject` step prints no `[subject] ... declare
-  no floor` line; raise `GOH_EMOJI_MIN_FILES` to 33 and that step goes red naming the key, the
-  floor and the count; restore it, green. Size S.
-- **G0.2 Push** G0.1 to `origin/main` (fast-forward only; the hooks commit `66441aa` and this
-  plan, `c74559e`, are pushed and passed the pre-push gate). Size S.
+- **G0.1 Set the scanner floors.** Closed `f6d0631`.
+- **G0.2 Push.** Closed `f6d0631`.
 
 ## Phase 1: branch topology (size S)
 
