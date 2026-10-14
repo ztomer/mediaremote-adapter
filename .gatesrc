@@ -19,3 +19,18 @@ GOH_LINE_EXCLUDE='^Sources/CIMediaRemote/MediaRemoteAdapter\.m$'
 GOH_SWIFT_LINT_BASELINE=.swiftlint-baseline.json
 # The exemption above is not an exemption from every bound: its ceiling is its size today.
 GOH_LINE_BASELINE=.line-baseline
+# Every scanner's floor (goh v0.27.0, docs/config.md): a full-scope scan that
+# reads less than this has lost its subject and is red, not clean. Nine tenths
+# of what each read on 2026-10-14 (the house rule; a count of 1 floors at 1);
+# lower one with the tree in the same commit, never to absorb a scan that went
+# blind.
+GOH_EMOJI_MIN_FILES=28                # read 32
+GOH_CONFLICT_MARKERS_MIN_FILES=28     # read 32
+GOH_FILE_LENGTH_MIN_FILES=9           # read 11
+GOH_SECRETS_MIN_FILES=28              # read 32
+GOH_SHELL_LINT_MIN_FILES=1            # read 1
+GOH_EARLY_EXIT_PIPE_MIN_FILES=5       # read 6
+GOH_DEAD_AFTER_EXEC_MIN_FILES=5       # read 6
+GOH_BARE_HOOK_INDEX_MIN_FILES=5       # read 6
+GOH_BARE_PYTHON_MIN_FILES=5           # read 6
+GOH_MD_LINKS_MIN_LINKS=1              # read 1
