@@ -2,12 +2,24 @@
 
 A Swift package for macOS that provides a modern interface for controlling media playback and receiving track information from the private `MediaRemote.framework`.
 
+## This fork
+
+This repository, `ztomer/mediaremote-adapter`, is a fork of [ejbills/mediaremote-adapter](https://github.com/ejbills/mediaremote-adapter) and exists for one consumer: **ZoneWM**, a macOS window manager that reads Now Playing through this package. ZoneWM pins this fork's `main` branch, so `main` is the fork line and its history is never rewritten.
+
+What the fork carries on top of upstream:
+
+- Swift 6 language mode, and a macOS 27 deployment floor (fork-only; it follows ZoneWM's own floor).
+- A fix for a 100% CPU spin: `getTrackInfo` leaked a pipe reader per call that never drained (`PipeReader`).
+- Tests for the wire protocol and `MediaController`, and a build gate.
+
+Upstream-able work goes to the `swift6-macos13` branch, which is the head of upstream pull request [ejbills#7](https://github.com/ejbills/mediaremote-adapter/pull/7) (macOS 13 floor, no fork-only changes). The plan is in [ROADMAP.md](ROADMAP.md).
+
 ## Installation
 
 Add `MediaRemoteAdapter` to your project using Swift Package Manager.
 
 1. In Xcode: **File > Add Packages...**
-2. Enter: `https://github.com/ejbills/mediaremote-adapter.git`
+2. Enter: `https://github.com/ztomer/mediaremote-adapter.git` and pick the `main` branch (this fork; the upstream package is `https://github.com/ejbills/mediaremote-adapter.git`).
 3. Add `MediaRemoteAdapter` to your target.
 
 ### Embedding the Framework
@@ -141,6 +153,10 @@ mediaController.getTrackInfo { trackInfo in
 | `repeatMode` | `RepeatMode?` | |
 
 > **Playback position:** `elapsedTimeMicros` is a snapshot from the last state change. Use `currentElapsedTime` to compute an accurate position on demand -- it interpolates from the snapshot using `timestampEpochMicros` and `playbackRate`.
+
+## License
+
+BSD 3-Clause, the license of the original [ungive/mediaremote-adapter](https://github.com/ungive/mediaremote-adapter). See [LICENSE](LICENSE).
 
 ## Acknowledgements
 
