@@ -1,10 +1,10 @@
-// swift-tools-version:6.3
+// swift-tools-version:6.4
 import PackageDescription
 
 // macOS 27 floor (2026-09-14; was .v13): follows the ZoneTilerWM root package so the adapter's
 // ObjC/C sources compile against the same deployment target as every consumer. This floor is
 // FORK-ONLY and lives on `main`; `swift6-macos13` is the upstream PR branch (ejbills#7) and keeps
-// the macOS 13 floor upstream can accept. Tools stay 6.3, Swift 6 mode.
+// the macOS 13 floor upstream can accept. Tools 6.4, Swift 6 mode.
 let package = Package(
     name: "MediaRemoteAdapter",
     platforms: [
@@ -14,7 +14,7 @@ let package = Package(
         .library(
             name: "MediaRemoteAdapter",
             type: .dynamic,
-            targets: ["MediaRemoteAdapter"]),
+            targets: ["MediaRemoteAdapter"])
     ],
     dependencies: [],
     targets: [
@@ -33,13 +33,10 @@ let package = Package(
             name: "CIMediaRemote",
             dependencies: [],
             publicHeadersPath: "include",
-            cSettings: [
-                .unsafeFlags(["-fobjc-arc"])
-            ],
             linkerSettings: [
-                .unsafeFlags(["-framework", "Foundation"]),
-                .unsafeFlags(["-framework", "AppKit"])
+                .linkedFramework("Foundation"),
+                .linkedFramework("AppKit")
             ]
         )
     ]
-) 
+)

@@ -27,8 +27,8 @@ case "${1:-}" in
     #   "$GOH/gates/rust_gate.sh"  .
     #   "$GOH/gates/py_gate.sh"    .
     "$GOH/gates/swift_gate.sh" .
-    # Layer 3 (genuinely local checks): create ./tools/repo_gates.sh and
-    # uncomment:
-    #   ./tools/repo_gates.sh
+    # Layer 3 (genuinely local checks): the manifest carries no unsafeFlags and the ObjC shim
+    # really compiled under ARC. Reads the build the swift gate just made.
+    ./tools/repo_gates.sh
     ;;
 esac
