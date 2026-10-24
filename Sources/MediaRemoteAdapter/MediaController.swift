@@ -5,7 +5,13 @@ import Foundation
 /// created and driven from main while its pipe handlers run on a private queue.
 public class MediaController: @unchecked Sendable {
 
+    /// Test seams: the script and library the child perl runs. Production passes nil for both and
+    /// gets the bundled `run.pl` and this framework's dylib; tests point them at a fixture script.
+    private let scriptPathOverride: String?
+    private let libraryPathOverride: String?
+
     private var perlScriptPath: String? {
+        if let scriptPathOverride { return scriptPathOverride }
         guard let path = Bundle.module.path(forResource: "run", ofType: "pl") else {
             assertionFailure("run.pl script not found in bundle resources.")
             return nil
@@ -31,10 +37,19 @@ public class MediaController: @unchecked Sendable {
     public var onDecodingError: ((Error, Data) -> Void)?
 
     public init() {
+        scriptPathOverride = nil
+        libraryPathOverride = nil
+        _ = MediaController.sigpipeIgnored
+    }
+
+    init(scriptPath: String, libraryPath: String) {
+        scriptPathOverride = scriptPath
+        libraryPathOverride = libraryPath
         _ = MediaController.sigpipeIgnored
     }
 
     private var libraryPath: String? {
+        if let libraryPathOverride { return libraryPathOverride }
         let bundle = Bundle(for: MediaController.self)
         guard let path = bundle.executablePath else {
             assertionFailure("Could not locate the executable path for the MediaRemoteAdapter framework.")
@@ -150,7 +165,7 @@ public class MediaController: @unchecked Sendable {
             if !executed {
                 DispatchQueue.main.async { onReceive(nil) }
             }
-        }) { [lineState] incomingData in
+        }, onData: { [lineState] incomingData in
 
             // Deliver exactly one result on the main queue; guarded by the state machine's lock.
             func deliver(_ trackInfo: TrackInfo?) {
@@ -186,7 +201,7 @@ public class MediaController: @unchecked Sendable {
             } catch {
                 deliver(nil)
             }
-        }
+        })
 
         do {
             try getProcess.run()
@@ -225,54 +240,7 @@ public class MediaController: @unchecked Sendable {
         listeningProcess?.standardOutput = outputPipe
 
         PipeReader.attach(outputPipe.fileHandleForReading) { [weak self] incomingData in
-            guard let self = self else { return }
-
-            self.bufferLock.lock()
-            defer { self.bufferLock.unlock() }
-
-            self.dataBuffer.append(incomingData)
-
-            guard let newlineData = "\n".data(using: .utf8) else { return }
-            while let range = self.dataBuffer.firstRange(of: newlineData, in: self.dataBufferSearchStart..<self.dataBuffer.count) {
-                guard range.lowerBound <= self.dataBuffer.count else {
-                    break
-                }
-
-                let lineData = self.dataBuffer.subdata(in: 0..<range.lowerBound)
-
-                self.dataBuffer.removeSubrange(0..<range.upperBound)
-                self.dataBufferSearchStart = 0
-
-                if lineData == "NIL".data(using: .utf8) {
-                    DispatchQueue.main.async {
-                        self.onTrackInfoReceived?(nil)
-                    }
-                    continue
-                }
-
-                if !lineData.isEmpty {
-                    self.eventCount += 1
-
-                    do {
-                        let trackInfo = try JSONDecoder().decode(TrackInfo.self, from: lineData)
-                        DispatchQueue.main.async {
-                            let emitted = self.preservingArtworkIfDowngrade(trackInfo)
-                            self.lastTrackInfo = emitted
-                            self.onTrackInfoReceived?(emitted)
-
-                            if self.eventCount >= self.restartThreshold {
-                                self.restartListeningProcess()
-                            }
-                        }
-                    } catch {
-                        DispatchQueue.main.async {
-                            self.onDecodingError?(error, lineData)
-                        }
-                    }
-                }
-            }
-
-            self.dataBufferSearchStart = self.dataBuffer.count
+            self?.ingest(incomingData)
         }
 
         listeningProcess?.terminationHandler = { [weak self] process in
@@ -293,6 +261,57 @@ public class MediaController: @unchecked Sendable {
         }
     }
 
+    /// The listener's wire protocol: newline-delimited JSON from `run.pl loop`, `NIL` for "no
+    /// player". Internal so tests can replay recorded lines without a child process.
+    func ingest(_ incomingData: Data) {
+        self.bufferLock.lock()
+        defer { self.bufferLock.unlock() }
+
+        self.dataBuffer.append(incomingData)
+
+        guard let newlineData = "\n".data(using: .utf8) else { return }
+        while let range = self.dataBuffer.firstRange(of: newlineData, in: self.dataBufferSearchStart..<self.dataBuffer.count) {
+            guard range.lowerBound <= self.dataBuffer.count else {
+                break
+            }
+
+            let lineData = self.dataBuffer.subdata(in: 0..<range.lowerBound)
+
+            self.dataBuffer.removeSubrange(0..<range.upperBound)
+            self.dataBufferSearchStart = 0
+
+            if lineData == "NIL".data(using: .utf8) {
+                DispatchQueue.main.async {
+                    self.onTrackInfoReceived?(nil)
+                }
+                continue
+            }
+
+            if !lineData.isEmpty {
+                self.eventCount += 1
+
+                do {
+                    let trackInfo = try JSONDecoder().decode(TrackInfo.self, from: lineData)
+                    DispatchQueue.main.async {
+                        let emitted = trackInfo.preservingArtwork(from: self.lastTrackInfo)
+                        self.lastTrackInfo = emitted
+                        self.onTrackInfoReceived?(emitted)
+
+                        if self.eventCount >= self.restartThreshold {
+                            self.restartListeningProcess()
+                        }
+                    }
+                } catch {
+                    DispatchQueue.main.async {
+                        self.onDecodingError?(error, lineData)
+                    }
+                }
+            }
+        }
+
+        self.dataBufferSearchStart = self.dataBuffer.count
+    }
+
     public func stopListening() {
         (listeningProcess?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
         listeningProcess?.terminate()
@@ -305,7 +324,7 @@ public class MediaController: @unchecked Sendable {
         dataBufferSearchStart = 0
     }
 
-    private func sendCommand(_ arguments: [String]) {
+    func sendCommand(_ arguments: [String]) {
         guard !arguments.isEmpty else { return }
         let line = arguments.joined(separator: " ") + "\n"
         guard let data = line.data(using: .utf8) else { return }
@@ -329,93 +348,6 @@ public class MediaController: @unchecked Sendable {
             }
             _ = self.runPerlCommand(arguments: arguments)
         }
-    }
-
-    public func play() { sendCommand(["play"]) }
-
-    public func pause() { sendCommand(["pause"]) }
-
-    public func togglePlayPause() { sendCommand(["toggle_play_pause"]) }
-
-    public func nextTrack() { sendCommand(["next_track"]) }
-
-    public func previousTrack() { sendCommand(["previous_track"]) }
-
-    public func stop() { sendCommand(["stop"]) }
-
-    public func setTime(seconds: Double) { sendCommand(["set_time", String(seconds)]) }
-
-    public func toggleShuffle() { sendCommand(["toggle_shuffle"]) }
-
-    public func toggleRepeat() { sendCommand(["toggle_repeat"]) }
-
-    public func startForwardSeek() { sendCommand(["start_forward_seek"]) }
-
-    public func endForwardSeek() { sendCommand(["end_forward_seek"]) }
-
-    public func startBackwardSeek() { sendCommand(["start_backward_seek"]) }
-
-    public func endBackwardSeek() { sendCommand(["end_backward_seek"]) }
-
-    public func goBackFifteenSeconds() { sendCommand(["go_back_fifteen_seconds"]) }
-
-    public func skipFifteenSeconds() { sendCommand(["skip_fifteen_seconds"]) }
-
-    public func likeTrack() { sendCommand(["like_track"]) }
-
-    public func banTrack() { sendCommand(["ban_track"]) }
-
-    public func addToWishList() { sendCommand(["add_to_wish_list"]) }
-
-    public func removeFromWishList() { sendCommand(["remove_from_wish_list"]) }
-
-    public func setShuffleMode(_ mode: TrackInfo.ShuffleMode) {
-        sendCommand(["set_shuffle_mode", String(mode.rawValue)])
-    }
-
-    public func setRepeatMode(_ mode: TrackInfo.RepeatMode) {
-        sendCommand(["set_repeat_mode", String(mode.rawValue)])
-    }
-
-    private func isSameTrack(_ a: TrackInfo.Payload, _ b: TrackInfo.Payload) -> Bool {
-        guard a.title == b.title, a.artist == b.artist else { return false }
-        let aAlbum = a.album ?? ""
-        let bAlbum = b.album ?? ""
-        return aAlbum == bAlbum || aAlbum.isEmpty || bAlbum.isEmpty
-    }
-
-    private func preservingArtworkIfDowngrade(_ incoming: TrackInfo) -> TrackInfo {
-        guard let previous = lastTrackInfo,
-              isSameTrack(previous.payload, incoming.payload) else {
-            return incoming
-        }
-
-        let previousLen = previous.payload.artworkDataBase64?.count ?? 0
-        let incomingLen = incoming.payload.artworkDataBase64?.count ?? 0
-        guard incomingLen < previousLen else {
-            return incoming
-        }
-
-        let p = incoming.payload
-        let merged = TrackInfo.Payload(
-            title: p.title,
-            artist: p.artist,
-            album: p.album,
-            isPlaying: p.isPlaying,
-            durationMicros: p.durationMicros,
-            elapsedTimeMicros: p.elapsedTimeMicros,
-            applicationName: p.applicationName,
-            bundleIdentifier: p.bundleIdentifier,
-            artworkDataBase64: previous.payload.artworkDataBase64,
-            artworkMimeType: previous.payload.artworkMimeType,
-            timestampEpochMicros: p.timestampEpochMicros,
-            PID: p.PID,
-            shuffleMode: p.shuffleMode,
-            repeatMode: p.repeatMode,
-            playbackRate: p.playbackRate,
-            artwork: previous.payload.artwork
-        )
-        return TrackInfo(payload: merged)
     }
 
     private func restartListeningProcess() {

@@ -15,17 +15,17 @@ final class PipeReaderTests: XCTestCase {
         let pipe = Pipe()
         let sink = Sink()
         let eof = expectation(description: "EOF observed")
-        PipeReader.attach(pipe.fileHandleForReading, onEOF: { eof.fulfill() }) { [sink] data in
+        PipeReader.attach(pipe.fileHandleForReading, onEOF: { eof.fulfill() }, onData: { [sink] data in
             sink.lock.lock()
             sink.data.append(data)
             sink.lock.unlock()
-        }
+        })
         pipe.fileHandleForWriting.write(Data("abc\n".utf8))
         try? pipe.fileHandleForWriting.close()
 
         wait(for: [eof], timeout: 5)
         XCTAssertNil(pipe.fileHandleForReading.readabilityHandler, "a reader left attached after EOF spins")
-        XCTAssertEqual(String(decoding: sink.data, as: UTF8.self), "abc\n")
+        XCTAssertEqual(String(bytes: sink.data, encoding: .utf8), "abc\n")
     }
 
     /// End to end through the call that shipped the spin: its per-call state was captured weakly,
