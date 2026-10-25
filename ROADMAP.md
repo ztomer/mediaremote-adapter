@@ -70,8 +70,11 @@ tests + coverage floors: `d64ef36`. M1.4 LICENSE + README: `e01a226`.
 - **M1.1 upstream offer.** Dropping `unsafeFlags` is upstreamable: offer it on PR #7 or a follow-up
   PR (owner's call; it changes the PR upstream reviews).
 - **R3.7 upstream offer: the listener race fix.** The `eventCount`/listener lock fix (closed below)
-  is upstream code. A patch against `swift6-macos13` (PR #7's head) is prepared but NOT pushed: a
-  commit there is published into PR #7 (owner's call, same as M1.1's offer).
+  is upstream code. `upstream-patches/swift6-macos13-0001-listener-race.patch` applies to
+  `swift6-macos13` (PR #7's head, `8e40638`; `git am`), builds there, and keeps the macOS 13 floor
+  (lock()/unlock(), no `NSLock.withLock`). NOT pushed: a commit there is published into PR #7
+  (owner's call, same as M1.1's offer). That branch has no listener test seam, so its TSan proof is
+  the fork's: the same races, red then green, on `main`. Delete the file once offered or declined.
 - **Artwork MIME vs bytes.** A live capture (2026-10-24, a third-party player, not committed: the
   owner's listening) reported `artworkMimeType: "image/jpeg"` over TIFF bytes (`TU0AKg` = `MM\0*`).
   `NSImage` decodes either, so nothing breaks today; a consumer trusting the MIME type would.

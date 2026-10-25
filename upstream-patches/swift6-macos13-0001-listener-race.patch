@@ -1,0 +1,212 @@
+From 6fcc3cd34a20888cf8f5207c984530259b2dd070 Mon Sep 17 00:00:00 2001
+From: ztomer <ztomer@gmail.com>
+Date: Sat, 24 Oct 2026 20:44:46 -0400
+Subject: [PATCH] MediaController: guard eventCount and the listener under
+ bufferLock
+
+eventCount was incremented under bufferLock on the pipe handler's queue but
+read without it on the main queue (the restart check, the termination
+handler) and reset without it in startListening. listeningProcess and
+listeningInputPipe were read on commandQueue (sendCommand) while the main
+queue wrote them (stopListening, the termination handler). ThreadSanitizer
+reports both as data races.
+
+- The restart decision is taken under the lock, on exactly the event that
+  reaches the threshold, and handed to the main-queue block.
+- Every read and write of eventCount, listeningProcess and
+  listeningInputPipe happens under bufferLock; sendCommand snapshots the
+  listener under it.
+- A listener's exit clears the slot only if it is still the current
+  listener, so a restarted child's late exit cannot nil out its
+  replacement.
+- stopListening and restartListeningProcess share one teardown.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../MediaRemoteAdapter/MediaController.swift  | 100 +++++++++++-------
+ 1 file changed, 61 insertions(+), 39 deletions(-)
+
+diff --git a/Sources/MediaRemoteAdapter/MediaController.swift b/Sources/MediaRemoteAdapter/MediaController.swift
+index ead31a2..d81ad3e 100644
+--- a/Sources/MediaRemoteAdapter/MediaController.swift
++++ b/Sources/MediaRemoteAdapter/MediaController.swift
+@@ -1,8 +1,9 @@
+ import Foundation
+ 
+-/// `@unchecked Sendable`: the streaming state (`dataBuffer`/`dataBufferSearchStart`/`lastTrackInfo`)
+-/// is guarded by `bufferLock`, and callbacks are delivered on the main queue — the controller is
+-/// created and driven from main while its pipe handlers run on a private queue.
++/// `@unchecked Sendable`: every field touched off the main queue is guarded by `bufferLock`: the
++/// stream state (`dataBuffer`/`dataBufferSearchStart`/`eventCount`), written by the pipe handler's
++/// queue, and the listener (`listeningProcess`/`listeningInputPipe`), read by `commandQueue`.
++/// `lastTrackInfo` and the callbacks live on the main queue, where the controller is driven.
+ public class MediaController: @unchecked Sendable {
+ 
+     private var perlScriptPath: String? {
+@@ -196,11 +197,11 @@ public class MediaController: @unchecked Sendable {
+     }
+ 
+     public func startListening() {
+-        guard listeningProcess == nil else {
+-            return
+-        }
+-
+-        eventCount = 0
++        bufferLock.lock()
++        let idle = listeningProcess == nil
++        if idle { eventCount = 0 }
++        bufferLock.unlock()
++        guard idle else { return }
+         startListeningInternal()
+     }
+ 
+@@ -212,17 +213,16 @@ public class MediaController: @unchecked Sendable {
+             return
+         }
+ 
+-        listeningProcess = Process()
+-        listeningProcess?.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
++        let process = Process()
++        process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+ 
+-        listeningProcess?.arguments = [scriptPath, libraryPath, "loop"]
++        process.arguments = [scriptPath, libraryPath, "loop"]
+ 
+         let inputPipe = Pipe()
+-        listeningProcess?.standardInput = inputPipe
+-        self.listeningInputPipe = inputPipe
++        process.standardInput = inputPipe
+ 
+         let outputPipe = Pipe()
+-        listeningProcess?.standardOutput = outputPipe
++        process.standardOutput = outputPipe
+ 
+         PipeReader.attach(outputPipe.fileHandleForReading) { [weak self] incomingData in
+             guard let self = self else { return }
+@@ -252,6 +252,9 @@ public class MediaController: @unchecked Sendable {
+ 
+                 if !lineData.isEmpty {
+                     self.eventCount += 1
++                    // Decided under the lock that guards the count: the main-queue block must not
++                    // read eventCount, which this queue writes.
++                    let restartDue = self.eventCount == self.restartThreshold
+ 
+                     do {
+                         let trackInfo = try JSONDecoder().decode(TrackInfo.self, from: lineData)
+@@ -260,7 +263,7 @@ public class MediaController: @unchecked Sendable {
+                             self.lastTrackInfo = emitted
+                             self.onTrackInfoReceived?(emitted)
+ 
+-                            if self.eventCount >= self.restartThreshold {
++                            if restartDue {
+                                 self.restartListeningProcess()
+                             }
+                         }
+@@ -275,34 +278,58 @@ public class MediaController: @unchecked Sendable {
+             self.dataBufferSearchStart = self.dataBuffer.count
+         }
+ 
+-        listeningProcess?.terminationHandler = { [weak self] process in
++        // Only the CURRENT listener's exit clears the slot: after a restart the old child's exit
++        // arrives late and must not nil out its replacement.
++        process.terminationHandler = { [weak self] exited in
+             DispatchQueue.main.async {
+-                self?.listeningProcess = nil
+-                self?.listeningInputPipe = nil
+-                if self?.eventCount != 0 {
+-                    self?.onListenerTerminated?()
++                guard let self = self else { return }
++                self.bufferLock.lock()
++                let current = self.listeningProcess === exited
++                if current {
++                    self.listeningProcess = nil
++                    self.listeningInputPipe = nil
++                }
++                let report = current && self.eventCount != 0
++                self.bufferLock.unlock()
++                if report {
++                    self.onListenerTerminated?()
+                 }
+             }
+         }
+ 
++        bufferLock.lock()
++        listeningProcess = process
++        listeningInputPipe = inputPipe
++        bufferLock.unlock()
+         do {
+-            try listeningProcess?.run()
++            try process.run()
+         } catch {
+             print("Failed to start listening process: \(error)")
+-            listeningProcess = nil
++            bufferLock.lock()
++            if listeningProcess === process {
++                listeningProcess = nil
++                listeningInputPipe = nil
++            }
++            bufferLock.unlock()
+         }
+     }
+ 
+     public func stopListening() {
+-        (listeningProcess?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+-        listeningProcess?.terminate()
++        tearDownListener(resetEventCount: false)
++    }
++
++    /// Detaches and stops the current listener and clears the stream state under the lock.
++    private func tearDownListener(resetEventCount: Bool) {
++        bufferLock.lock()
++        let process = listeningProcess
+         listeningProcess = nil
+         listeningInputPipe = nil
+-        
+-        bufferLock.lock()
+-        defer { bufferLock.unlock() }
+         dataBuffer.removeAll()
+         dataBufferSearchStart = 0
++        if resetEventCount { eventCount = 0 }
++        bufferLock.unlock()
++        (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
++        process?.terminate()
+     }
+ 
+     private func sendCommand(_ arguments: [String]) {
+@@ -312,9 +339,13 @@ public class MediaController: @unchecked Sendable {
+ 
+         commandQueue.async { [weak self] in
+             guard let self = self else { return }
+-            if let process = self.listeningProcess,
++            self.bufferLock.lock()
++            let listener = self.listeningProcess
++            let listenerInput = self.listeningInputPipe
++            self.bufferLock.unlock()
++            if let process = listener,
+                process.isRunning,
+-               let pipe = self.listeningInputPipe {
++               let pipe = listenerInput {
+                 let handle = pipe.fileHandleForWriting
+                 do {
+                     if #available(macOS 10.15.4, *) {
+@@ -419,16 +450,7 @@ public class MediaController: @unchecked Sendable {
+     }
+ 
+     private func restartListeningProcess() {
+-        (listeningProcess?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+-        listeningProcess?.terminate()
+-        listeningProcess = nil
+-        listeningInputPipe = nil
+-        
+-        bufferLock.lock()
+-        defer { bufferLock.unlock() }
+-        dataBuffer.removeAll()
+-        dataBufferSearchStart = 0
+-        eventCount = 0
++        tearDownListener(resetEventCount: true)
+ 
+         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+             self?.startListeningInternal()
+-- 
+2.56.0
+
