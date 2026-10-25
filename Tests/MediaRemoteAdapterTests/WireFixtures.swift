@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Lines as the vendored core prints them. `stream` (with the listener's flags, `CoreCLI.stream`):
@@ -29,6 +30,9 @@ import Foundation
 ///   - `modesReported`/`modesOff`: no player here reports a mode, the fixture player included
 ///     (MediaPlayer's current shuffle/repeat types do not reach Now Playing), so the decoding is
 ///     held to MediaRemote's numbering, which `commands.tsv` records live in the other direction;
+///   - `tiffLabelledJPEG`: the JPEG-labelled TIFF artwork was seen live from a third-party player
+///     (the owner's music, never recorded); the fixture player's artwork always arrives as JPEG,
+///     so the case is a recorded line with its artwork bytes replaced by a TIFF image;
 ///   - the malformed lines: rejects by definition, no healthy core prints them.
 enum WireFixtures {
 
@@ -153,6 +157,18 @@ enum WireFixtures {
     /// The albums/one pair, and a 0, which MediaRemote does not use for a mode.
     static let modesMiddle = line("\"title\":\"Modes\",\"shuffleMode\":2,\"repeatMode\":2,\"playing\":true")
     static let modesZero = line("\"title\":\"Modes\",\"shuffleMode\":0,\"repeatMode\":0,\"playing\":true")
+
+    /// The recorded playing line, its artwork bytes replaced by a TIFF image, its label still JPEG.
+    static let tiffLabelledJPEG: String = edited(playing, ["artworkData": tiffImageBase64])
+
+    /// A 2x2 TIFF (AppKit writes the little-endian `II*\0` form; the player sent `MM\0*`).
+    static let tiffImageBase64: String = {
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2, bitsPerSample: 8,
+                                         samplesPerPixel: 3, hasAlpha: false, isPlanar: false,
+                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let tiff = rep.tiffRepresentation else { fatalError("could not make a TIFF") }
+        return tiff.base64EncodedString()
+    }()
 
     /// A diff line: the listener asks for --no-diff, so one arriving means the CLI changed.
     static let diffLine = "{\"type\":\"data\",\"diff\":true,\"payload\":{\"playing\":false}}"

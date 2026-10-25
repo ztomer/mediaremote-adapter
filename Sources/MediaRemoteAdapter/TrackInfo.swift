@@ -30,6 +30,8 @@ public struct TrackInfo: Codable, Sendable {
         public let applicationName: String?
         public let bundleIdentifier: String?
         public let artworkDataBase64: String?
+        /// The artwork's type as its bytes say (`ArtworkType`); the player's label only when the
+        /// bytes are not a format the package knows, or there are none yet.
         public let artworkMimeType: String?
         public let timestampEpochMicros: Double?
         public let PID: pid_t?
@@ -103,7 +105,7 @@ public struct TrackInfo: Codable, Sendable {
             self.applicationName = applicationName
             self.bundleIdentifier = bundleIdentifier
             self.artworkDataBase64 = artworkDataBase64
-            self.artworkMimeType = artworkMimeType
+            self.artworkMimeType = ArtworkType.mimeType(ofBase64: artworkDataBase64, declared: artworkMimeType)
             self.timestampEpochMicros = timestampEpochMicros
             self.PID = PID
             self.shuffleMode = shuffleMode
@@ -138,7 +140,10 @@ public struct TrackInfo: Codable, Sendable {
             self.isPlaying = Self.decodeFlag(container, .playing) ?? Self.decodeFlag(container, .isPlaying)
 
             let artworkData = self.artworkDataBase64.flatMap { Data(base64Encoded: $0) }
-            self.artworkMimeType = try container.decodeIfPresent(String.self, forKey: .artworkMimeType)
+            // The type of the bytes, not the player's label (`ArtworkType`).
+            self.artworkMimeType = ArtworkType.mimeType(
+                ofBase64: self.artworkDataBase64,
+                declared: try container.decodeIfPresent(String.self, forKey: .artworkMimeType))
             self.artwork = artworkData.flatMap(NSImage.init(data:))
         }
 
