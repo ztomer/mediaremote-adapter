@@ -1,0 +1,23 @@
+# argv	received by tools/fixture-player (';'-joined; empty: nothing arrived)
+send 0	play
+send 1	pause
+send 2	togglePlayPause
+send 3	stop
+send 4	nextTrack
+send 5	previousTrack
+send 6	
+send 7	
+send 8	seekForward begin
+send 9	seekForward end
+send 10	seekBackward begin
+send 11	seekBackward end
+send 12	
+send 13	
+seek 12500000	changePlaybackPosition 12.500
+seek 0	changePlaybackPosition 0.000
+shuffle 1	changeShuffleMode off
+shuffle 2	changeShuffleMode collections
+shuffle 3	changeShuffleMode items
+repeat 1	changeRepeatMode off
+repeat 2	changeRepeatMode one
+repeat 3	changeRepeatMode all

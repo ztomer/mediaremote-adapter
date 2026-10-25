@@ -7,7 +7,7 @@ import XCTest
 final class MediaControllerStreamTests: XCTestCase {
 
     private enum Event: Equatable {
-        case track(String?)       // title, nil for the NIL "no player" report
+        case track(String?)       // title, nil for the empty "nothing playing" payload
         case decodingError(String) // the raw line the decoder rejected
     }
 
@@ -17,7 +17,7 @@ final class MediaControllerStreamTests: XCTestCase {
     }
 
     private func controller() -> (MediaController, Recorder) {
-        let controller = MediaController()
+        let controller = MediaController(applicationName: { _ in nil })
         let recorder = Recorder()
         controller.onTrackInfoReceived = { info in
             recorder.events.append(.track(info?.payload.title))
@@ -78,7 +78,8 @@ final class MediaControllerStreamTests: XCTestCase {
 
     func testMalformedLinesReachOnDecodingErrorWithTheirBytesAndDoNotStopTheStream() {
         let (controller, recorder) = controller()
-        let lines = [WireFixtures.truncated, WireFixtures.wrongType, WireFixtures.noPayload, WireFixtures.notJSON]
+        let lines = [WireFixtures.truncated, WireFixtures.wrongType, WireFixtures.noPayload, WireFixtures.notJSON,
+                     WireFixtures.diffLine, WireFixtures.unknownType]
         feed(controller, lines.joined(separator: "\n") + "\n" + WireFixtures.playing + "\n")
         settle()
         XCTAssertEqual(recorder.events, lines.map(Event.decodingError) + [.track("Fixture Tone")])
@@ -86,7 +87,7 @@ final class MediaControllerStreamTests: XCTestCase {
 
     func testAPartialTrailingLineWaitsInTheBufferUntilItsNewline() {
         let (controller, recorder) = controller()
-        feed(controller, WireFixtures.noPlayer + "\n" + "{\"payload\":")
+        feed(controller, WireFixtures.noPlayer + "\n" + "{\"type\":\"data\",\"payload\":")
         settle()
         XCTAssertEqual(recorder.events, [.track(nil)])
         feed(controller, "{\"title\":\"Late\"}}\n")
@@ -97,7 +98,7 @@ final class MediaControllerStreamTests: XCTestCase {
     // MARK: - artwork downgrade (the recorded sequences)
 
     private func artwork(_ line: String) -> String? {
-        WireFixtures.payload(line)["artworkDataBase64"] as? String
+        WireFixtures.payload(line)["artworkData"] as? String
     }
 
     func testTheWholeRecordedSessionStreamsWithoutADecodingError() {
@@ -106,6 +107,7 @@ final class MediaControllerStreamTests: XCTestCase {
             feed(controller, session.joined(separator: "\n") + "\n")
             settle()
             XCTAssertEqual(recorder.events.count, session.count)
+            XCTAssertEqual(recorder.events.first, .track(nil), "recorded: a stream opens with the empty payload")
             XCTAssertFalse(recorder.events.contains { if case .decodingError = $0 { true } else { false } })
             let second = recorder.tracks.filter { $0.payload.title == "Second Tone" }
             XCTAssertNil(second.first?.payload.artwork, "the new track does not inherit the old art")
@@ -114,8 +116,11 @@ final class MediaControllerStreamTests: XCTestCase {
     }
 
     func testArtworkIsKeptWhenTheSameTrackReportsItAgainWithoutArtwork() throws {
+        // The recording never re-reports a paused track without its art (the core carries the art
+        // over itself for the same item): the second report is the recorded paused line, art removed.
         let (controller, recorder) = controller()
-        feed(controller, WireFixtures.playing + "\n" + WireFixtures.pausedArtworkPending + "\n")
+        let pausedArtworkPending = WireFixtures.edited(WireFixtures.paused, ["artworkData": NSNull()])
+        feed(controller, WireFixtures.playing + "\n" + pausedArtworkPending + "\n")
         settle()
         let second = try XCTUnwrap(recorder.tracks.last)
         XCTAssertEqual(second.payload.artworkDataBase64, artwork(WireFixtures.playing))
@@ -123,7 +128,7 @@ final class MediaControllerStreamTests: XCTestCase {
         XCTAssertNotNil(second.payload.artwork)
         XCTAssertEqual(second.payload.isPlaying, false, "everything but the artwork is the NEW report")
         XCTAssertEqual(second.payload.elapsedTimeMicros,
-                       WireFixtures.payload(WireFixtures.pausedArtworkPending)["elapsedTimeMicros"] as? Double)
+                       WireFixtures.payload(WireFixtures.paused)["elapsedTimeMicros"] as? Double)
     }
 
     func testArtworkIsDroppedWhenTheTrackChanges() throws {
@@ -147,7 +152,7 @@ final class MediaControllerStreamTests: XCTestCase {
         // recorded pending line with its album edited.
         let (controller, recorder) = controller()
         feed(controller, WireFixtures.playing + "\n"
-             + WireFixtures.edited(WireFixtures.pausedArtworkPending, ["album": "Live"]) + "\n")
+             + WireFixtures.edited(WireFixtures.paused, ["album": "Live", "artworkData": NSNull()]) + "\n")
         settle()
         XCTAssertNil(try XCTUnwrap(recorder.tracks.last).payload.artworkDataBase64)
     }
@@ -157,5 +162,36 @@ final class MediaControllerStreamTests: XCTestCase {
         feed(controller, WireFixtures.artworkPending + "\n" + WireFixtures.playing + "\n")
         settle()
         XCTAssertEqual(try XCTUnwrap(recorder.tracks.last).payload.artworkDataBase64, artwork(WireFixtures.playing))
+    }
+
+    // MARK: - the player's name
+
+    func testTheApplicationNameIsLookedUpFromTheReportedProcess() throws {
+        let asked = LockedPIDs()
+        let controller = MediaController(applicationName: { pid in
+            asked.append(pid)
+            return "Fixture Player"
+        })
+        var names: [String?] = []
+        controller.onTrackInfoReceived = { names.append($0?.payload.applicationName) }
+        feed(controller, WireFixtures.playing + "\n" + WireFixtures.noPlayer + "\n")
+        settle()
+        XCTAssertEqual(names, ["Fixture Player", nil])
+        let pid = try XCTUnwrap(WireFixtures.payload(WireFixtures.playing)["processIdentifier"] as? Int)
+        XCTAssertEqual(asked.values, [pid_t(pid)])
+    }
+
+    func testANameAlreadyOnTheWireIsKept() throws {
+        let (controller, recorder) = controller()
+        feed(controller, WireFixtures.edited(WireFixtures.playing, ["applicationName": "Wire Name"]) + "\n")
+        settle()
+        XCTAssertEqual(try XCTUnwrap(recorder.tracks.last).payload.applicationName, "Wire Name")
+    }
+
+    private final class LockedPIDs: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: [pid_t] = []
+        func append(_ pid: pid_t) { lock.withLock { stored.append(pid) } }
+        var values: [pid_t] { lock.withLock { stored } }
     }
 }

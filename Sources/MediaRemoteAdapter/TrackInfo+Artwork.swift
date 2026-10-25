@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 extension TrackInfo {
@@ -18,26 +19,44 @@ extension TrackInfo {
             return self
         }
 
+        return copy(artworkDataBase64: previous.payload.artworkDataBase64,
+                    artworkMimeType: previous.payload.artworkMimeType,
+                    artwork: previous.payload.artwork)
+    }
+
+    /// The core reports the player's process and bundle identifier but not its display name, which
+    /// the old run.pl did: `name` (a lookup by PID) fills it in. A payload that already has a name,
+    /// or has no PID, is returned unchanged.
+    func namingApplication(with name: (pid_t) -> String?) -> TrackInfo {
+        guard payload.applicationName == nil, let pid = payload.PID, let resolved = name(pid) else {
+            return self
+        }
+        return copy(applicationName: resolved)
+    }
+
+    /// This report with some fields replaced; every other field is kept.
+    private func copy(applicationName: String? = nil, artworkDataBase64: String? = nil,
+                      artworkMimeType: String? = nil, artwork: NSImage? = nil) -> TrackInfo {
         let current = payload
-        let merged = TrackInfo.Payload(
+        let artworkReplaced = artworkDataBase64 != nil
+        return TrackInfo(payload: TrackInfo.Payload(
             title: current.title,
             artist: current.artist,
             album: current.album,
             isPlaying: current.isPlaying,
             durationMicros: current.durationMicros,
             elapsedTimeMicros: current.elapsedTimeMicros,
-            applicationName: current.applicationName,
+            applicationName: applicationName ?? current.applicationName,
             bundleIdentifier: current.bundleIdentifier,
-            artworkDataBase64: previous.payload.artworkDataBase64,
-            artworkMimeType: previous.payload.artworkMimeType,
+            artworkDataBase64: artworkReplaced ? artworkDataBase64 : current.artworkDataBase64,
+            artworkMimeType: artworkReplaced ? artworkMimeType : current.artworkMimeType,
             timestampEpochMicros: current.timestampEpochMicros,
             PID: current.PID,
             shuffleMode: current.shuffleMode,
             repeatMode: current.repeatMode,
             playbackRate: current.playbackRate,
-            artwork: previous.payload.artwork
-        )
-        return TrackInfo(payload: merged)
+            artwork: artworkReplaced ? artwork : current.artwork
+        ))
     }
 
     private static func isSameTrack(_ lhs: Payload, _ rhs: Payload) -> Bool {

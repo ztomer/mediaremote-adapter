@@ -2,14 +2,14 @@ import Foundation
 import XCTest
 @testable import MediaRemoteAdapter
 
-/// A stand-in for `run.pl`: the same argv contract (`<script> <library> <command> [args]`, run by
-/// `/usr/bin/perl`), but it replays canned stdout instead of loading the private framework.
+/// A stand-in for `run.pl`: the same argv contract (`<script> <image> <function> [params|options]`,
+/// run by `/usr/bin/perl`), but it replays canned stdout instead of loading the private framework.
 ///
-/// The "library" argument is repurposed as the fixture's log path, so every spawn is observable:
-///   - `argv <command> [args]` is appended for each launch
-///   - for `get`/`loop` the contents of `<log>.out` are printed
-///   - `loop` with `<log>.hold` present then reads stdin to EOF, logging `stdin <line>` per line
-///     (a live listener taking commands); without `.hold` it exits, as a crashed listener would.
+/// The "image" argument is repurposed as the fixture's log path, so every spawn is observable:
+///   - `argv <function> [args]` is appended for each launch
+///   - for `get`/`stream` the contents of `<log>.out` are printed
+///   - `stream` with `<log>.hold` present then stays alive (bounded: two minutes) until it is
+///     terminated, as a live listener does; without `.hold` it exits, as a crashed listener would.
 final class FixtureProcess {
     let directory: URL
     let scriptPath: String
@@ -22,11 +22,13 @@ final class FixtureProcess {
     open(my $log, '>>', $log_path) or die "log: $!";
     select((select($log), $| = 1)[0]);
     print $log join(' ', 'argv', $cmd, @args), "\\n";
-    if ($cmd eq 'get' || $cmd eq 'loop') {
+    if ($cmd eq 'get' || $cmd eq 'stream') {
         if (open(my $fh, '<', "$log_path.out")) { print $_ while <$fh>; close $fh; }
     }
-    if ($cmd eq 'loop' && -e "$log_path.hold") {
-        while (my $line = <STDIN>) { chomp $line; print $log "stdin $line\\n"; }
+    if ($cmd eq 'stream' && -e "$log_path.hold") {
+        my $stdin = <STDIN>;
+        print $log 'stdin ', (defined $stdin ? 'data' : 'eof'), "\\n";
+        sleep 120;
     }
     """
 
@@ -46,12 +48,12 @@ final class FixtureProcess {
         MediaController(scriptPath: scriptPath, libraryPath: logPath)
     }
 
-    /// What the next `get`/`loop` prints.
+    /// What the next `get`/`stream` prints.
     func setOutput(_ lines: [String]) throws {
         try (lines.joined(separator: "\n") + "\n").write(toFile: logPath + ".out", atomically: true, encoding: .utf8)
     }
 
-    /// Make `loop` stay alive reading commands from stdin until EOF or SIGTERM.
+    /// Make `stream` stay alive until it is terminated.
     func holdLoopOpen() throws {
         try Data().write(to: URL(fileURLWithPath: logPath + ".hold"))
     }

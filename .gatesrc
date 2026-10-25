@@ -10,22 +10,21 @@ GOH_EXCLUDE='^Vendor/'
 # GOH_PY_COV_MIN=95
 GOH_SWIFT_MODE=spm
 # GOH_SWIFT_SCHEME=MyAppTests
-# Coverage (2026-10-24). The package number is dragged down by the ObjC shim
-# (Sources/CIMediaRemote), which drives the private MediaRemote.framework and cannot run headless:
-# 0 of 725 lines in MediaRemoteAdapter.m. So two floors: the package at nine tenths of what it read
-# (43.5%), and the Swift target, which the tests do reach, at 90 (read 94.0). Raise, never lower.
-GOH_SWIFT_COV_MIN=39
+# Coverage. Two floors: the Swift target, which the tests do reach, at 90 (coverage-floors.json;
+# read 94.0 on 2026-10-24), and the package. The package number is dragged down by the ObjC core,
+# which drives the private MediaRemote.framework and runs only inside the perl helper, never in
+# the test process. Its floor follows the core it measures: 39 was nine tenths of 43.5% over the
+# old ejbills shim (725 instrumented lines); the vendored ungive core is 2,179 (32 of them run, the
+# accepted-value tables built at load), and the package read 28.9% over it on 2026-10-24 with the
+# Swift target unchanged at 94.0. Re-seeded at nine tenths of that in the commit that swapped the
+# core; raise, never lower, while the core stays the same.
+GOH_SWIFT_COV_MIN=26
 GOH_SWIFT_COV_FLOORS=coverage-floors.json
 # GOH_MAX_SCRATCH_GB=25 etc. live OUTSIDE the gates since v0.8.0 — set them
 # in the environment for the scripts repo's bin/disk_hygiene.sh, not here.
-# Upstream-owned (ejbills/mediaremote-adapter): splitting it in the fork would turn every upstream
-# merge of this file into a hand-merge. Remove when upstream splits it or the fork stops merging.
-GOH_LINE_EXCLUDE='^Sources/CIMediaRemote/MediaRemoteAdapter\.m$'
 # Shrink-only lint ratchet, seeded 2026-10-12 with the 29 violations present at install. Re-record
 # (swiftlint lint --strict --write-baseline .swiftlint-baseline.json) only to SHRINK it.
 GOH_SWIFT_LINT_BASELINE=.swiftlint-baseline.json
-# The exemption above is not an exemption from every bound: its ceiling is its size today.
-GOH_LINE_BASELINE=.line-baseline
 # Every scanner's floor (goh v0.27.0, docs/config.md): a full-scope scan that
 # reads less than this has lost its subject and is red, not clean. Nine tenths
 # of what each read on 2026-10-14 (the house rule; a count of 1 floors at 1);

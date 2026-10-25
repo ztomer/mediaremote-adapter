@@ -3,8 +3,8 @@ import XCTest
 @testable import MediaRemoteAdapter
 
 /// `MediaController` against a REAL child process: `/usr/bin/perl` running a fixture in place of
-/// `run.pl` (see `FixtureProcess`). Covers the spawn, the pipes, EOF, the command path and the
-/// listener's lifecycle - everything the stream tests deliberately skip.
+/// `run.pl` (see `FixtureProcess`). Covers the spawn, the argv, the pipes, EOF, the command path
+/// and the listener's lifecycle - everything the stream tests deliberately skip.
 final class MediaControllerProcessTests: XCTestCase {
 
     private final class Box<Value> {
@@ -36,18 +36,18 @@ final class MediaControllerProcessTests: XCTestCase {
         return Fetched(info: result.value, calls: calls.value, fixture: fixture)
     }
 
-    func testGetTrackInfoDeliversThePlayingLineOnce() throws {
-        let got = try fetch([WireFixtures.playing])
+    func testGetTrackInfoDeliversTheRecordedPayloadOnce() throws {
+        let got = try fetch([WireFixtures.getPlaying])
         XCTAssertEqual(got.info?.payload.title, "Fixture Tone")
-        let recordedPID = (WireFixtures.payload(WireFixtures.playing)["PID"] as? String).flatMap { Int32($0) }
+        let recordedPID = (WireFixtures.payload(WireFixtures.getPlaying)["processIdentifier"] as? Int).map { pid_t($0) }
         XCTAssertNotNil(recordedPID)
         XCTAssertEqual(got.info?.payload.PID, recordedPID)
         XCTAssertEqual(got.calls, 1)
-        XCTAssertEqual(got.fixture.logLines, ["argv get"])
+        XCTAssertEqual(got.fixture.logLines, ["argv get --micros"])
     }
 
     func testGetTrackInfoDeliversNilForNoPlayer() throws {
-        let got = try fetch([WireFixtures.noPlayer])
+        let got = try fetch([WireFixtures.getNoPlayer])
         XCTAssertNil(got.info)
         XCTAssertEqual(got.calls, 1)
     }
@@ -59,7 +59,10 @@ final class MediaControllerProcessTests: XCTestCase {
     }
 
     func testGetTrackInfoSkipsBlankLinesAndTakesTheFirstRealOne() throws {
-        let got = try fetch(["", WireFixtures.paused, WireFixtures.playing])
+        let paused = WireFixtures.getPlaying
+            .replacingOccurrences(of: "\"playing\":true", with: "\"playing\":false")
+        XCTAssertNotEqual(paused, WireFixtures.getPlaying)
+        let got = try fetch(["", paused, WireFixtures.getPlaying])
         XCTAssertEqual(got.info?.payload.isPlaying, false, "the FIRST non-empty line wins")
         XCTAssertEqual(got.calls, 1)
     }
@@ -87,35 +90,46 @@ final class MediaControllerProcessTests: XCTestCase {
 
     // MARK: - commands
 
-    func testEveryPlaybackCommandReachesThePerlScriptWithItsArguments() throws {
+    /// Every public command, the argv it runs (one child each, in call order). What each argv makes
+    /// a real player receive is `CommandFixtureTests`'s half.
+    static func commandTable(_ controller: MediaController) -> [(String, () -> Void)] {
+        [
+            ("send 0", controller.play),
+            ("send 1", controller.pause),
+            ("send 2", controller.togglePlayPause),
+            ("send 4", controller.nextTrack),
+            ("send 5", controller.previousTrack),
+            ("send 3", controller.stop),
+            ("seek 12500000", { controller.setTime(seconds: 12.5) }),
+            ("seek 0", { controller.setTime(seconds: -3) }),
+            ("send 6", controller.toggleShuffle),
+            ("send 7", controller.toggleRepeat),
+            ("send 8", controller.startForwardSeek),
+            ("send 9", controller.endForwardSeek),
+            ("send 10", controller.startBackwardSeek),
+            ("send 11", controller.endBackwardSeek),
+            ("send 12", controller.goBackFifteenSeconds),
+            ("send 13", controller.skipFifteenSeconds),
+            ("shuffle 1", { controller.setShuffleMode(.off) }),
+            ("shuffle 2", { controller.setShuffleMode(.albums) }),
+            ("shuffle 3", { controller.setShuffleMode(.songs) }),
+            ("repeat 1", { controller.setRepeatMode(.off) }),
+            ("repeat 2", { controller.setRepeatMode(.one) }),
+            ("repeat 3", { controller.setRepeatMode(.all) })
+        ]
+    }
+
+    func testEveryPlaybackCommandRunsTheCoreWithItsArguments() throws {
         let fixture = try FixtureProcess()
         let controller = fixture.controller()
-        let table: [(String, () -> Void)] = [
-            ("argv play", controller.play),
-            ("argv pause", controller.pause),
-            ("argv toggle_play_pause", controller.togglePlayPause),
-            ("argv next_track", controller.nextTrack),
-            ("argv previous_track", controller.previousTrack),
-            ("argv stop", controller.stop),
-            ("argv set_time 12.5", { controller.setTime(seconds: 12.5) }),
-            ("argv toggle_shuffle", controller.toggleShuffle),
-            ("argv toggle_repeat", controller.toggleRepeat),
-            ("argv start_forward_seek", controller.startForwardSeek),
-            ("argv end_forward_seek", controller.endForwardSeek),
-            ("argv start_backward_seek", controller.startBackwardSeek),
-            ("argv end_backward_seek", controller.endBackwardSeek),
-            ("argv go_back_fifteen_seconds", controller.goBackFifteenSeconds),
-            ("argv skip_fifteen_seconds", controller.skipFifteenSeconds),
-            ("argv like_track", controller.likeTrack),
-            ("argv ban_track", controller.banTrack),
-            ("argv add_to_wish_list", controller.addToWishList),
-            ("argv remove_from_wish_list", controller.removeFromWishList),
-            ("argv set_shuffle_mode 2", { controller.setShuffleMode(.albums) }),
-            ("argv set_repeat_mode 1", { controller.setRepeatMode(.one) })
-        ]
+        let table = Self.commandTable(controller)
         for (_, send) in table { send() }
+        // A position that is no position sends nothing.
+        controller.setTime(seconds: .nan)
+        controller.setTime(seconds: .infinity)
         fixture.waitUntil("all \(table.count) commands run") { fixture.logLines.count >= table.count }
-        XCTAssertEqual(fixture.logLines, table.map(\.0), "commands run in order, one child each")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(fixture.logLines, table.map { "argv " + $0.0 }, "commands run in order, one child each")
     }
 
     // MARK: - the listener
@@ -131,20 +145,23 @@ final class MediaControllerProcessTests: XCTestCase {
         return (fixture, controller)
     }
 
-    func testListenerStreamsLinesAndTakesCommandsOnStdinWhileAlive() throws {
+    private static let streamArgv = "argv " + CoreCLI.stream.joined(separator: " ")
+
+    func testListenerStreamsLinesAndCommandsRunBesideIt() throws {
         let record = Box<[String?]>([])
         let (fixture, controller) = try startListener(
             lines: [WireFixtures.playing, WireFixtures.noPlayer, WireFixtures.paused], hold: true, record: record)
         defer { controller.stopListening() }
         fixture.waitUntil("three events") { record.value.count >= 3 }
         XCTAssertEqual(record.value, ["Fixture Tone", nil, "Fixture Tone"])
+        XCTAssertEqual(Self.streamArgv, "argv stream --micros --no-diff --debounce=100 --exit-with-parent")
 
         controller.startListening() // already listening: must not spawn a second child
         controller.togglePlayPause()
         controller.setTime(seconds: 3)
-        fixture.waitUntil("commands written to the live listener") { fixture.logLines.count >= 3 }
-        XCTAssertEqual(fixture.logLines, ["argv loop", "stdin toggle_play_pause", "stdin set_time 3.0"],
-                       "one child, commands over its stdin, no per-command spawn")
+        fixture.waitUntil("two command children") { fixture.logLines.count >= 4 }
+        XCTAssertEqual(fixture.logLines, [Self.streamArgv, "stdin eof", "argv send 2", "argv seek 3000000"],
+                       "one listener, given no stdin; each command its own child (the core's stream reads none)")
     }
 
     func testListenerExitAfterEventsReportsTermination() throws {
@@ -158,7 +175,7 @@ final class MediaControllerProcessTests: XCTestCase {
         XCTAssertEqual(terminated.value, 1)
 
         controller.startListening() // the slot is free again after termination
-        fixture.waitUntil("a second listener spawn") { fixture.logLines.filter { $0 == "argv loop" }.count == 2 }
+        fixture.waitUntil("a second listener spawn") { fixture.logLines.filter { $0 == Self.streamArgv }.count == 2 }
         controller.stopListening()
     }
 
@@ -167,7 +184,7 @@ final class MediaControllerProcessTests: XCTestCase {
         let (fixture, controller) = try startListener(lines: [], hold: false, record: record)
         let terminated = Box(0)
         controller.onListenerTerminated = { terminated.value += 1 }
-        fixture.waitUntil("the child ran") { fixture.logLines.contains("argv loop") }
+        fixture.waitUntil("the child ran") { fixture.logLines.contains(Self.streamArgv) }
         RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         XCTAssertEqual(terminated.value, 0, "a listener that never produced an event is a startup failure, not a death")
     }
@@ -178,7 +195,7 @@ final class MediaControllerProcessTests: XCTestCase {
             lines: Array(repeating: WireFixtures.playing, count: 100), hold: true, record: record)
         defer { controller.stopListening() }
         fixture.waitUntil("the listener respawned after 100 events", timeout: 20) {
-            fixture.logLines.filter { $0 == "argv loop" }.count >= 2
+            fixture.logLines.filter { $0 == Self.streamArgv }.count >= 2
         }
     }
 }

@@ -1,52 +1,59 @@
 import Foundation
 
-/// The playback commands. Each is one word on `run.pl`'s command line: over the live listener's
-/// stdin when there is one, else a one-shot child (`MediaController.sendCommand`).
+/// The playback commands. Each runs the core once (`CoreCLI`): `send <MRACommand>` for the
+/// transport, `seek`, `shuffle` and `repeat` for the rest. What each one makes a player receive is
+/// recorded live in Fixtures/commands.tsv and held by `CommandFixtureTests`.
+///
+/// Not here, on purpose (measured 2026-10-24 against tools/fixture-player, macOS 27): the old
+/// like/ban/add-to-wish-list/remove-from-wish-list commands (MRCommand 0x6A-0x6D). None reached
+/// the player's like, dislike or bookmark target, and 0x6D arrived as "next track"; ungive's
+/// core refuses them for the same reason. And ungive's `speed`: the player received rate 1.0
+/// whatever speed was sent.
 extension MediaController {
 
-    public func play() { sendCommand(["play"]) }
+    public func play() { send(.play) }
 
-    public func pause() { sendCommand(["pause"]) }
+    public func pause() { send(.pause) }
 
-    public func togglePlayPause() { sendCommand(["toggle_play_pause"]) }
+    public func togglePlayPause() { send(.togglePlayPause) }
 
-    public func nextTrack() { sendCommand(["next_track"]) }
+    public func nextTrack() { send(.nextTrack) }
 
-    public func previousTrack() { sendCommand(["previous_track"]) }
+    public func previousTrack() { send(.previousTrack) }
 
-    public func stop() { sendCommand(["stop"]) }
+    public func stop() { send(.stop) }
 
-    public func setTime(seconds: Double) { sendCommand(["set_time", String(seconds)]) }
+    /// Seeks to `seconds` (whole microseconds on the wire; a negative position is the start).
+    public func setTime(seconds: Double) {
+        guard let arguments = CoreCLI.seek(seconds: seconds) else { return }
+        sendCommand(arguments)
+    }
 
-    public func toggleShuffle() { sendCommand(["toggle_shuffle"]) }
+    public func toggleShuffle() { send(.toggleShuffle) }
 
-    public func toggleRepeat() { sendCommand(["toggle_repeat"]) }
+    public func toggleRepeat() { send(.toggleRepeat) }
 
-    public func startForwardSeek() { sendCommand(["start_forward_seek"]) }
+    public func startForwardSeek() { send(.startForwardSeek) }
 
-    public func endForwardSeek() { sendCommand(["end_forward_seek"]) }
+    public func endForwardSeek() { send(.endForwardSeek) }
 
-    public func startBackwardSeek() { sendCommand(["start_backward_seek"]) }
+    public func startBackwardSeek() { send(.startBackwardSeek) }
 
-    public func endBackwardSeek() { sendCommand(["end_backward_seek"]) }
+    public func endBackwardSeek() { send(.endBackwardSeek) }
 
-    public func goBackFifteenSeconds() { sendCommand(["go_back_fifteen_seconds"]) }
+    public func goBackFifteenSeconds() { send(.goBackFifteenSeconds) }
 
-    public func skipFifteenSeconds() { sendCommand(["skip_fifteen_seconds"]) }
-
-    public func likeTrack() { sendCommand(["like_track"]) }
-
-    public func banTrack() { sendCommand(["ban_track"]) }
-
-    public func addToWishList() { sendCommand(["add_to_wish_list"]) }
-
-    public func removeFromWishList() { sendCommand(["remove_from_wish_list"]) }
+    public func skipFifteenSeconds() { send(.skipFifteenSeconds) }
 
     public func setShuffleMode(_ mode: TrackInfo.ShuffleMode) {
-        sendCommand(["set_shuffle_mode", String(mode.rawValue)])
+        sendCommand(CoreCLI.shuffle(mode))
     }
 
     public func setRepeatMode(_ mode: TrackInfo.RepeatMode) {
-        sendCommand(["set_repeat_mode", String(mode.rawValue)])
+        sendCommand(CoreCLI.repeat(mode))
+    }
+
+    private func send(_ command: CoreCLI.Command) {
+        sendCommand(CoreCLI.send(command))
     }
 }

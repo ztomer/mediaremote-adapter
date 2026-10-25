@@ -1,14 +1,23 @@
+import AppKit
 import Foundation
+internal import MediaRemoteAdapterCore
 
 /// `@unchecked Sendable`: every field touched off the main queue is guarded by `stateLock` — the
 /// stream state (`dataBuffer`, `dataBufferSearchStart`, `eventCount`), written by the pipe reader's
-/// queue, and the listener (`listeningProcess`, `listeningInputPipe`), read by `commandQueue`.
-/// `lastTrackInfo` and the callbacks live on the main queue only. The controller is created and
-/// driven from main.
+/// queue, and the listener (`listeningProcess`), read and written from main and the reader's
+/// termination path. `lastTrackInfo` and the callbacks live on the main queue only. The controller
+/// is created and driven from main.
+///
+/// Every call runs the vendored core (ungive/mediaremote-adapter, Vendor/) through `/usr/bin/perl`
+/// and its script, bundled here as `run.pl`: the system perl is entitled to MediaRemote, this
+/// process is not. The listener is `run.pl <image> stream`, a one-shot read is `get`, and each
+/// command is its own child (`send`, `seek`, `shuffle`, `repeat`): ungive's `stream` takes no
+/// commands on its stdin. No child is given this process's stdin.
 public class MediaController: @unchecked Sendable {
 
     /// Test seams: the script and library the child perl runs. Production passes nil for both and
-    /// gets the bundled `run.pl` and this framework's dylib; tests point them at a fixture script.
+    /// gets the bundled `run.pl` and the image the core is linked into; tests point them at a
+    /// fixture script.
     private let scriptPathOverride: String?
     private let libraryPathOverride: String?
 
@@ -22,7 +31,6 @@ public class MediaController: @unchecked Sendable {
     }
 
     private var listeningProcess: Process?
-    private var listeningInputPipe: Pipe?
     private var dataBuffer = Data()
     private var dataBufferSearchStart = 0
     private var lastTrackInfo: TrackInfo?
@@ -30,6 +38,9 @@ public class MediaController: @unchecked Sendable {
     private let stateLock = NSLock()
     private let restartThreshold = 100
     private let commandQueue = DispatchQueue(label: "mediaremote-adapter.commands")
+    /// The player's display name, looked up from its process (the core reports the PID and bundle
+    /// identifier, not the name). A seam so the stream tests stay independent of what is running.
+    let applicationName: @Sendable (pid_t) -> String?
     private static let sigpipeIgnored: Void = {
         signal(SIGPIPE, SIG_IGN)
     }()
@@ -41,20 +52,37 @@ public class MediaController: @unchecked Sendable {
     public init() {
         scriptPathOverride = nil
         libraryPathOverride = nil
+        applicationName = MediaController.runningApplicationName
         _ = MediaController.sigpipeIgnored
     }
 
-    init(scriptPath: String, libraryPath: String) {
+    init(scriptPath: String? = nil, libraryPath: String? = nil,
+         applicationName: @escaping @Sendable (pid_t) -> String? = MediaController.runningApplicationName) {
         scriptPathOverride = scriptPath
         libraryPathOverride = libraryPath
+        self.applicationName = applicationName
         _ = MediaController.sigpipeIgnored
     }
+
+    @Sendable static func runningApplicationName(_ pid: pid_t) -> String? {
+        NSRunningApplication(processIdentifier: pid)?.localizedName
+    }
+
+    /// The Mach-O image the vendored core is linked into: what the perl helper loads. Found from a
+    /// core symbol's own address, so it is right however the consumer packaged this library (a
+    /// framework from xcodebuild, a bare dylib from `swift build`, a test bundle).
+    static let coreImagePath: String? = {
+        let symbol: @convention(c) () -> Void = adapter_get
+        var info = Dl_info()
+        guard dladdr(unsafeBitCast(symbol, to: UnsafeRawPointer.self), &info) != 0,
+              let name = info.dli_fname else { return nil }
+        return String(cString: name)
+    }()
 
     private var libraryPath: String? {
         if let libraryPathOverride { return libraryPathOverride }
-        let bundle = Bundle(for: MediaController.self)
-        guard let path = bundle.executablePath else {
-            assertionFailure("Could not locate the executable path for the MediaRemoteAdapter framework.")
+        guard let path = Self.coreImagePath else {
+            assertionFailure("Could not locate the image the MediaRemoteAdapter core is linked into.")
             return nil
         }
         return path
@@ -73,6 +101,7 @@ public class MediaController: @unchecked Sendable {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         process.arguments = [scriptPath, libraryPath] + arguments
 
+        process.standardInput = FileHandle.nullDevice
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
 
@@ -135,6 +164,7 @@ public class MediaController: @unchecked Sendable {
 
         // The completion is forwarded to the main queue inside every handler below.
         nonisolated(unsafe) let onReceive = onReceive
+        let applicationName = self.applicationName
         let getProcess = Process()
         getProcess.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
 
@@ -148,8 +178,9 @@ public class MediaController: @unchecked Sendable {
         }
         let lineState = LineState()
 
-        getProcess.arguments = [scriptPath, libraryPath, "get"]
+        getProcess.arguments = [scriptPath, libraryPath] + CoreCLI.get
 
+        getProcess.standardInput = FileHandle.nullDevice
         let outputPipe = Pipe()
         getProcess.standardOutput = outputPipe
 
@@ -194,15 +225,8 @@ public class MediaController: @unchecked Sendable {
             lineState.lock.unlock()
 
             guard let lineData else { return }
-            if lineData == "NIL".data(using: .utf8) {
-                deliver(nil)
-                return
-            }
-            do {
-                deliver(try JSONDecoder().decode(TrackInfo.self, from: lineData))
-            } catch {
-                deliver(nil)
-            }
+            // `get` prints the payload itself (no envelope), or `null` for "no player".
+            deliver((try? CoreCLI.decodeGet(lineData))?.namingApplication(with: applicationName))
         })
 
         do {
@@ -212,8 +236,9 @@ public class MediaController: @unchecked Sendable {
         }
     }
 
-    /// The listener's wire protocol: newline-delimited JSON from `run.pl loop`, `NIL` for "no
-    /// player". Internal so tests can replay recorded lines without a child process.
+    /// The listener's wire protocol: newline-delimited JSON from `run.pl stream` (`CoreCLI`), an
+    /// empty payload for "no player". Internal so tests can replay recorded lines without a child
+    /// process.
     func ingest(_ incomingData: Data) {
         self.stateLock.lock()
         defer { self.stateLock.unlock() }
@@ -231,35 +256,37 @@ public class MediaController: @unchecked Sendable {
             self.dataBuffer.removeSubrange(0..<range.upperBound)
             self.dataBufferSearchStart = 0
 
-            if lineData == "NIL".data(using: .utf8) {
+            guard !lineData.isEmpty else { continue }
+            let trackInfo: TrackInfo?
+            do {
+                trackInfo = try CoreCLI.decodeStreamLine(lineData)?.namingApplication(with: applicationName)
+            } catch {
+                DispatchQueue.main.async {
+                    self.onDecodingError?(error, lineData)
+                }
+                continue
+            }
+            // "No player" (an empty payload) is delivered as nil and is not counted: the count
+            // measures the listener's track reports, which is what the restart threshold bounds.
+            guard let trackInfo else {
                 DispatchQueue.main.async {
                     self.onTrackInfoReceived?(nil)
                 }
                 continue
             }
 
-            if !lineData.isEmpty {
-                self.eventCount += 1
-                // Decided HERE, under the lock that guards the count: the main-queue block below
-                // must not read `eventCount` (this queue writes it). Exactly the event that reaches
-                // the threshold restarts the listener; the restart resets the count.
-                let restartDue = self.eventCount == self.restartThreshold
+            self.eventCount += 1
+            // Decided HERE, under the lock that guards the count: the main-queue block below
+            // must not read `eventCount` (this queue writes it). Exactly the event that reaches
+            // the threshold restarts the listener; the restart resets the count.
+            let restartDue = self.eventCount == self.restartThreshold
+            DispatchQueue.main.async {
+                let emitted = trackInfo.preservingArtwork(from: self.lastTrackInfo)
+                self.lastTrackInfo = emitted
+                self.onTrackInfoReceived?(emitted)
 
-                do {
-                    let trackInfo = try JSONDecoder().decode(TrackInfo.self, from: lineData)
-                    DispatchQueue.main.async {
-                        let emitted = trackInfo.preservingArtwork(from: self.lastTrackInfo)
-                        self.lastTrackInfo = emitted
-                        self.onTrackInfoReceived?(emitted)
-
-                        if restartDue {
-                            self.restartListeningProcess()
-                        }
-                    }
-                } catch {
-                    DispatchQueue.main.async {
-                        self.onDecodingError?(error, lineData)
-                    }
+                if restartDue {
+                    self.restartListeningProcess()
                 }
             }
         }
@@ -267,30 +294,12 @@ public class MediaController: @unchecked Sendable {
         self.dataBufferSearchStart = self.dataBuffer.count
     }
 
+    /// Runs one command as its own child, in call order. ungive's `stream` reads no commands, so
+    /// unlike the old `run.pl loop` a live listener is never written to: every command spawns.
     func sendCommand(_ arguments: [String]) {
         guard !arguments.isEmpty else { return }
-        let line = arguments.joined(separator: " ") + "\n"
-        guard let data = line.data(using: .utf8) else { return }
-
         commandQueue.async { [weak self] in
-            guard let self = self else { return }
-            let (listener, listenerInput) = self.stateLock.withLock { (self.listeningProcess, self.listeningInputPipe) }
-            if let process = listener,
-               process.isRunning,
-               let pipe = listenerInput {
-                let handle = pipe.fileHandleForWriting
-                do {
-                    if #available(macOS 10.15.4, *) {
-                        try handle.write(contentsOf: data)
-                    } else {
-                        handle.write(data)
-                    }
-                    return
-                } catch {
-                    // Pipe closed under us; fall through to spawn.
-                }
-            }
-            _ = self.runPerlCommand(arguments: arguments)
+            _ = self?.runPerlCommand(arguments: arguments)
         }
     }
 }
@@ -319,10 +328,10 @@ extension MediaController {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
-        process.arguments = [scriptPath, libraryPath, "loop"]
+        process.arguments = [scriptPath, libraryPath] + CoreCLI.stream
 
-        let inputPipe = Pipe()
-        process.standardInput = inputPipe
+        // The core reads nothing from stdin; never hand it this process's own.
+        process.standardInput = FileHandle.nullDevice
 
         let outputPipe = Pipe()
         process.standardOutput = outputPipe
@@ -339,7 +348,6 @@ extension MediaController {
                 let report = self.stateLock.withLock {
                     guard self.listeningProcess === exited else { return false }
                     self.listeningProcess = nil
-                    self.listeningInputPipe = nil
                     return self.eventCount != 0
                 }
                 if report {
@@ -350,7 +358,6 @@ extension MediaController {
 
         stateLock.withLock {
             listeningProcess = process
-            listeningInputPipe = inputPipe
         }
         do {
             try process.run()
@@ -359,7 +366,6 @@ extension MediaController {
             stateLock.withLock {
                 if listeningProcess === process {
                     listeningProcess = nil
-                    listeningInputPipe = nil
                 }
             }
         }
@@ -371,7 +377,6 @@ extension MediaController {
         let process = stateLock.withLock {
             let process = listeningProcess
             listeningProcess = nil
-            listeningInputPipe = nil
             dataBuffer.removeAll()
             dataBufferSearchStart = 0
             if resetEventCount { eventCount = 0 }
