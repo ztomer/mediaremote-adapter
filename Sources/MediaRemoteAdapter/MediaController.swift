@@ -1,8 +1,10 @@
 import Foundation
 
-/// `@unchecked Sendable`: the streaming state (`dataBuffer`/`dataBufferSearchStart`/`lastTrackInfo`)
-/// is guarded by `bufferLock`, and callbacks are delivered on the main queue — the controller is
-/// created and driven from main while its pipe handlers run on a private queue.
+/// `@unchecked Sendable`: every field touched off the main queue is guarded by `stateLock` — the
+/// stream state (`dataBuffer`, `dataBufferSearchStart`, `eventCount`), written by the pipe reader's
+/// queue, and the listener (`listeningProcess`, `listeningInputPipe`), read by `commandQueue`.
+/// `lastTrackInfo` and the callbacks live on the main queue only. The controller is created and
+/// driven from main.
 public class MediaController: @unchecked Sendable {
 
     /// Test seams: the script and library the child perl runs. Production passes nil for both and
@@ -25,7 +27,7 @@ public class MediaController: @unchecked Sendable {
     private var dataBufferSearchStart = 0
     private var lastTrackInfo: TrackInfo?
     private var eventCount = 0
-    private let bufferLock = NSLock()
+    private let stateLock = NSLock()
     private let restartThreshold = 100
     private let commandQueue = DispatchQueue(label: "mediaremote-adapter.commands")
     private static let sigpipeIgnored: Void = {
@@ -210,62 +212,11 @@ public class MediaController: @unchecked Sendable {
         }
     }
 
-    public func startListening() {
-        guard listeningProcess == nil else {
-            return
-        }
-
-        eventCount = 0
-        startListeningInternal()
-    }
-
-    private func startListeningInternal() {
-        guard let scriptPath = perlScriptPath else {
-            return
-        }
-        guard let libraryPath = libraryPath else {
-            return
-        }
-
-        listeningProcess = Process()
-        listeningProcess?.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
-
-        listeningProcess?.arguments = [scriptPath, libraryPath, "loop"]
-
-        let inputPipe = Pipe()
-        listeningProcess?.standardInput = inputPipe
-        self.listeningInputPipe = inputPipe
-
-        let outputPipe = Pipe()
-        listeningProcess?.standardOutput = outputPipe
-
-        PipeReader.attach(outputPipe.fileHandleForReading) { [weak self] incomingData in
-            self?.ingest(incomingData)
-        }
-
-        listeningProcess?.terminationHandler = { [weak self] process in
-            DispatchQueue.main.async {
-                self?.listeningProcess = nil
-                self?.listeningInputPipe = nil
-                if self?.eventCount != 0 {
-                    self?.onListenerTerminated?()
-                }
-            }
-        }
-
-        do {
-            try listeningProcess?.run()
-        } catch {
-            print("Failed to start listening process: \(error)")
-            listeningProcess = nil
-        }
-    }
-
     /// The listener's wire protocol: newline-delimited JSON from `run.pl loop`, `NIL` for "no
     /// player". Internal so tests can replay recorded lines without a child process.
     func ingest(_ incomingData: Data) {
-        self.bufferLock.lock()
-        defer { self.bufferLock.unlock() }
+        self.stateLock.lock()
+        defer { self.stateLock.unlock() }
 
         self.dataBuffer.append(incomingData)
 
@@ -289,6 +240,10 @@ public class MediaController: @unchecked Sendable {
 
             if !lineData.isEmpty {
                 self.eventCount += 1
+                // Decided HERE, under the lock that guards the count: the main-queue block below
+                // must not read `eventCount` (this queue writes it). Exactly the event that reaches
+                // the threshold restarts the listener; the restart resets the count.
+                let restartDue = self.eventCount == self.restartThreshold
 
                 do {
                     let trackInfo = try JSONDecoder().decode(TrackInfo.self, from: lineData)
@@ -297,7 +252,7 @@ public class MediaController: @unchecked Sendable {
                         self.lastTrackInfo = emitted
                         self.onTrackInfoReceived?(emitted)
 
-                        if self.eventCount >= self.restartThreshold {
+                        if restartDue {
                             self.restartListeningProcess()
                         }
                     }
@@ -312,18 +267,6 @@ public class MediaController: @unchecked Sendable {
         self.dataBufferSearchStart = self.dataBuffer.count
     }
 
-    public func stopListening() {
-        (listeningProcess?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
-        listeningProcess?.terminate()
-        listeningProcess = nil
-        listeningInputPipe = nil
-        
-        bufferLock.lock()
-        defer { bufferLock.unlock() }
-        dataBuffer.removeAll()
-        dataBufferSearchStart = 0
-    }
-
     func sendCommand(_ arguments: [String]) {
         guard !arguments.isEmpty else { return }
         let line = arguments.joined(separator: " ") + "\n"
@@ -331,9 +274,10 @@ public class MediaController: @unchecked Sendable {
 
         commandQueue.async { [weak self] in
             guard let self = self else { return }
-            if let process = self.listeningProcess,
+            let (listener, listenerInput) = self.stateLock.withLock { (self.listeningProcess, self.listeningInputPipe) }
+            if let process = listener,
                process.isRunning,
-               let pipe = self.listeningInputPipe {
+               let pipe = listenerInput {
                 let handle = pipe.fileHandleForWriting
                 do {
                     if #available(macOS 10.15.4, *) {
@@ -349,18 +293,100 @@ public class MediaController: @unchecked Sendable {
             _ = self.runPerlCommand(arguments: arguments)
         }
     }
+}
+
+// The listener's lifecycle. An extension in this file (so it shares the class's private state)
+// rather than the class body.
+extension MediaController {
+
+    public func startListening() {
+        let idle = stateLock.withLock {
+            guard listeningProcess == nil else { return false }
+            eventCount = 0
+            return true
+        }
+        guard idle else { return }
+        startListeningInternal()
+    }
+
+    private func startListeningInternal() {
+        guard let scriptPath = perlScriptPath else {
+            return
+        }
+        guard let libraryPath = libraryPath else {
+            return
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        process.arguments = [scriptPath, libraryPath, "loop"]
+
+        let inputPipe = Pipe()
+        process.standardInput = inputPipe
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+
+        PipeReader.attach(outputPipe.fileHandleForReading) { [weak self] incomingData in
+            self?.ingest(incomingData)
+        }
+
+        // Only the CURRENT listener's exit clears the slot: after a restart the old child's exit
+        // arrives late and must not nil out its replacement.
+        process.terminationHandler = { [weak self] exited in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let report = self.stateLock.withLock {
+                    guard self.listeningProcess === exited else { return false }
+                    self.listeningProcess = nil
+                    self.listeningInputPipe = nil
+                    return self.eventCount != 0
+                }
+                if report {
+                    self.onListenerTerminated?()
+                }
+            }
+        }
+
+        stateLock.withLock {
+            listeningProcess = process
+            listeningInputPipe = inputPipe
+        }
+        do {
+            try process.run()
+        } catch {
+            print("Failed to start listening process: \(error)")
+            stateLock.withLock {
+                if listeningProcess === process {
+                    listeningProcess = nil
+                    listeningInputPipe = nil
+                }
+            }
+        }
+    }
+
+    /// Detaches and stops the current listener and clears the stream state, under the lock; the
+    /// caller decides whether a new one follows.
+    private func tearDownListener(resetEventCount: Bool) {
+        let process = stateLock.withLock {
+            let process = listeningProcess
+            listeningProcess = nil
+            listeningInputPipe = nil
+            dataBuffer.removeAll()
+            dataBufferSearchStart = 0
+            if resetEventCount { eventCount = 0 }
+            return process
+        }
+        (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
+        process?.terminate()
+    }
+
+    public func stopListening() {
+        tearDownListener(resetEventCount: false)
+    }
 
     private func restartListeningProcess() {
-        (listeningProcess?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
-        listeningProcess?.terminate()
-        listeningProcess = nil
-        listeningInputPipe = nil
-        
-        bufferLock.lock()
-        defer { bufferLock.unlock() }
-        dataBuffer.removeAll()
-        dataBufferSearchStart = 0
-        eventCount = 0
+        tearDownListener(resetEventCount: true)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             self?.startListeningInternal()

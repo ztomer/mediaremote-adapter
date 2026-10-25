@@ -62,4 +62,24 @@ for obj in "${objs[@]}"; do
     fi
 done
 
+# 3. The tests under ThreadSanitizer. MediaController moves state between the main queue, its pipe
+#    reader's queue and its command queue; a plain test run passes over a data race that only TSan
+#    sees (eventCount was read on main while the reader wrote it under the lock: 2026-10-24).
+#    Its own scratch path, so the instrumented build never replaces the one checked above.
+section "mediaremote-adapter: ThreadSanitizer"
+if [ "${MRA_SKIP_TSAN:-0}" = "1" ]; then
+    err "MRA_SKIP_TSAN=1: the race check did not run"
+    fail=1
+else
+    tsan_log="$(mktemp -t mra-tsan)"
+    if (cd "$ROOT" && swift test --sanitize=thread --scratch-path "$ROOT/.build/tsan") >"$tsan_log" 2>&1 \
+        && ! grep -aq 'WARNING: ThreadSanitizer' "$tsan_log"; then
+        ok "swift test --sanitize=thread: no races"
+    else
+        grep -a -A3 -E 'WARNING: ThreadSanitizer|SUMMARY: ThreadSanitizer|error:' "$tsan_log" | head -60 >&2 || true
+        err "ThreadSanitizer run failed or reported a race (full log: $tsan_log)"
+        fail=1
+    fi
+fi
+
 exit "$fail"
