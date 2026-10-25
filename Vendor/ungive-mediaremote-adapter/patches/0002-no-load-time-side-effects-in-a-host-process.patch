@@ -1,0 +1,99 @@
+From: ztomer <ztomer@gmail.com>
+Subject: [PATCH] No load-time side effects in a host process
+
+---
+diff --git a/src/adapter/globals.h b/src/adapter/globals.h
+index 27e3408..b0baa31 100644
+--- a/src/adapter/globals.h
++++ b/src/adapter/globals.h
+@@ -9,7 +9,12 @@
+ 
+ #import "private/MediaRemote.h"
+ 
+-extern MediaRemote* g_mediaRemote;
+-extern dispatch_queue_t g_serialdispatchQueue;
++// Initialized on first use, not at load (local patch 0002): the framework is linked into host
++// applications as well as loaded by the perl script, and a host must not have MediaRemote loaded,
++// or the process exited, by dyld.
++extern MediaRemote* mra_globals_mediaRemote(void);
++extern dispatch_queue_t mra_globals_serialdispatchQueue(void);
++#define g_mediaRemote (mra_globals_mediaRemote())
++#define g_serialdispatchQueue (mra_globals_serialdispatchQueue())
+ 
+ #endif // MEDIAREMOTEADAPTER_ADAPTER_GLOBALS_H
+diff --git a/src/adapter/globals.m b/src/adapter/globals.m
+index 7f3b262..222bc9c 100644
+--- a/src/adapter/globals.m
++++ b/src/adapter/globals.m
+@@ -5,15 +5,32 @@
+ 
+ #import "utility/helpers.h"
+ 
+-MediaRemote *g_mediaRemote = NULL;
+-dispatch_queue_t g_serialdispatchQueue;
++static MediaRemote *s_mediaRemote = NULL;
++static dispatch_queue_t s_serialdispatchQueue;
+ 
+-__attribute__((constructor)) static void initGlobals() {
+-    g_mediaRemote = [[MediaRemote alloc] init];
+-    if (!g_mediaRemote) {
++static void initGlobals() {
++    s_mediaRemote = [[MediaRemote alloc] init];
++    if (!s_mediaRemote) {
+         fail(@"Failed to initialize MediaRemote Framework");
+         return;
+     }
+-    g_serialdispatchQueue = dispatch_queue_create(
++    s_serialdispatchQueue = dispatch_queue_create(
+         "mediaremote-adapter.serial-dispatch-queue", DISPATCH_QUEUE_SERIAL);
+ }
++
++static void ensureGlobals() {
++    static dispatch_once_t once;
++    dispatch_once(&once, ^{
++      initGlobals();
++    });
++}
++
++MediaRemote *mra_globals_mediaRemote(void) {
++    ensureGlobals();
++    return s_mediaRemote;
++}
++
++dispatch_queue_t mra_globals_serialdispatchQueue(void) {
++    ensureGlobals();
++    return s_serialdispatchQueue;
++}
+diff --git a/src/adapter/stream.m b/src/adapter/stream.m
+index b6cc74e..1214e02 100644
+--- a/src/adapter/stream.m
++++ b/src/adapter/stream.m
+@@ -20,6 +20,8 @@
+ 
+ static CFRunLoopRef g_runLoop = NULL;
+ 
++static void init();
++
+ static NSString *serializeData(NSDictionary *data, BOOL diff, BOOL pretty) {
+     return serializeJsonDictionarySafe(
+         @{
+@@ -146,6 +148,10 @@ static MetadataStats compareIdentifyingTrackKeys(NSDictionary *prev,
+ 
+ extern void adapter_stream() {
+ 
++    // Installed here, not at load (local patch 0002): a host application that links the
++    // framework must keep its own SIGINT/SIGTERM handling.
++    init();
++
+     // Get ADAPTER_TEST_MODE as a boolean and set BOOL isTestMode
+     BOOL isTestMode = NO;
+     char *testModeEnv = getenv("ADAPTER_TEST_MODE");
+@@ -517,7 +523,7 @@ static void handleSignal(int signal) {
+     }
+ }
+ 
+-__attribute__((constructor)) static void init() {
++static void init() {
+     g_runLoop = CFRunLoopGetCurrent();
+     signal(SIGINT, handleSignal);
+     signal(SIGTERM, handleSignal);

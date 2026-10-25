@@ -1,0 +1,76 @@
+From: ztomer <ztomer@gmail.com>
+Subject: [PATCH] stream --exit-with-parent
+
+---
+diff --git a/bin/mediaremote-adapter.pl b/bin/mediaremote-adapter.pl
+index 8f7a2b2..728dcfd 100755
+--- a/bin/mediaremote-adapter.pl
++++ b/bin/mediaremote-adapter.pl
+@@ -56,6 +56,7 @@ OPTIONS:
+   stream
+     --no-diff: Disable diffing and always dump all metadata
+     --debounce=N: Delay in milliseconds to prevent spam (0 by default)
++    --exit-with-parent: Stop when the process that started the stream exits
+   get, stream
+     --micros: Replaces the following time keys with microsecond equivalents:
+       "duration" -> "durationMicros"
+@@ -221,6 +222,9 @@ elsif ($function_name eq "stream") {
+     elsif ($key eq "human-readable" || $key eq "h") {
+       set_env_option($options, "human-readable");
+     }
++    elsif ($key eq "exit-with-parent") {
++      set_env_option($options, $key);
++    }
+     elsif ($key eq "experimental-peculiar-debounce:com.tidal.desktop") {
+       set_env_option_value($options, $key);
+     }
+diff --git a/src/adapter/stream.m b/src/adapter/stream.m
+index 1214e02..87553c4 100644
+--- a/src/adapter/stream.m
++++ b/src/adapter/stream.m
+@@ -21,6 +21,35 @@
+ static CFRunLoopRef g_runLoop = NULL;
+ 
+ static void init();
++extern void _adapter_stream_cancel();
++
++// Local patch 0004 (--exit-with-parent): stop streaming when the process that
++// started this one exits. The stream is otherwise only ended by a signal, so a
++// parent that crashed or was killed leaves it running until its next write
++// fails, which with nothing playing may be never.
++static dispatch_source_t g_parentWatch = NULL;
++
++static void watchParent() {
++    pid_t parent = getppid();
++    if (parent <= 1) {
++        _adapter_stream_cancel();
++        return;
++    }
++    g_parentWatch = dispatch_source_create(
++        DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)parent, DISPATCH_PROC_EXIT,
++        dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
++    if (g_parentWatch == NULL) {
++        return;
++    }
++    dispatch_source_set_event_handler(g_parentWatch, ^{
++      _adapter_stream_cancel();
++    });
++    dispatch_resume(g_parentWatch);
++    // The parent may have exited before the watch was armed.
++    if (getppid() != parent) {
++        _adapter_stream_cancel();
++    }
++}
+ 
+ static NSString *serializeData(NSDictionary *data, BOOL diff, BOOL pretty) {
+     return serializeJsonDictionarySafe(
+@@ -151,6 +180,9 @@ extern void adapter_stream() {
+     // Installed here, not at load (local patch 0002): a host application that links the
+     // framework must keep its own SIGINT/SIGTERM handling.
+     init();
++    if (getEnvOption(@"exit-with-parent") != nil) {
++        watchParent();
++    }
+ 
+     // Get ADAPTER_TEST_MODE as a boolean and set BOOL isTestMode
+     BOOL isTestMode = NO;

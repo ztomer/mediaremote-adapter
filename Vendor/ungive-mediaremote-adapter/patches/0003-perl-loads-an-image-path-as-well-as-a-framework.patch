@@ -1,0 +1,44 @@
+From: ztomer <ztomer@gmail.com>
+Subject: [PATCH] The script loads an image path as well as a framework
+
+---
+diff --git a/bin/mediaremote-adapter.pl b/bin/mediaremote-adapter.pl
+index c586bce..8f7a2b2 100755
+--- a/bin/mediaremote-adapter.pl
++++ b/bin/mediaremote-adapter.pl
+@@ -17,7 +17,8 @@ Usage:
+                          [FUNCTION [PARAMS|OPTIONS...]]
+ 
+ FRAMEWORK_PATH:
+-  Absolute path to the MediaRemoteAdapter.framework directory
++  Absolute path to the MediaRemoteAdapter.framework directory, or to the
++  Mach-O image (dylib, bundle executable) the adapter is linked into
+ 
+ TEST_CLIENT_PATH: (optional)
+   Absolute path to the MediaRemoteAdapterTestClient executable. Only for "test"
+@@ -106,12 +107,20 @@ if (!defined $ARGV[0]) {
+   print_help();
+ }
+ 
+-my $framework_basename = File::Basename::basename($framework_path);
+-fail "Provided path is not a framework: $framework_path"
+-  unless $framework_basename =~ s/\.framework$//;
++# Local patch 0003: FRAMEWORK_PATH may also name the Mach-O image the adapter is
++# linked into (a dylib or a bundle executable, as a Swift package builds it).
++my $framework;
++if (-f $framework_path) {
++  $framework = $framework_path;
++}
++else {
++  my $framework_basename = File::Basename::basename($framework_path);
++  fail "Provided path is not a framework: $framework_path"
++    unless $framework_basename =~ s/\.framework$//;
+ 
+-my $framework = File::Spec->catfile($framework_path, $framework_basename);
+-fail "Framework not found at $framework" unless -e $framework;
++  $framework = File::Spec->catfile($framework_path, $framework_basename);
++  fail "Framework not found at $framework" unless -e $framework;
++}
+ 
+ my $handle = DynaLoader::dl_load_file($framework, 0)
+   or fail "Failed to load framework: $framework";

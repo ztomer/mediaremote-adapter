@@ -1,0 +1,37 @@
+From bf8bf81304e6a0769d5879aeeb55aa7b462766e9 Mon Sep 17 00:00:00 2001
+From: Matthew Giles <matthew.gilez@gmail.com>
+Date: Tue, 12 May 2026 16:15:49 -0600
+Subject: [PATCH] Fix observer/registration race at stream startup
+
+---
+ src/adapter/stream.m | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/src/adapter/stream.m b/src/adapter/stream.m
+index ff27dc8..dc67741 100644
+--- a/src/adapter/stream.m
++++ b/src/adapter/stream.m
+@@ -360,10 +360,6 @@ extern void adapter_stream() {
+       requestAll();
+     };
+ 
+-    // FIXME Is this foolproof? This continues and registers observers
+-    // which might intervene with the initial requests.
+-    requestAll();
+-
+     NSNotificationCenter *default_center = [NSNotificationCenter defaultCenter];
+     NSNotificationCenter *shared_workscape_notification_center =
+         [[NSWorkspace sharedWorkspace] notificationCenter];
+@@ -483,6 +479,12 @@ extern void adapter_stream() {
+ 
+     g_mediaRemote.registerForNowPlayingNotifications(g_serialdispatchQueue);
+ 
++    // Issue the initial fetch from the serial queue so its replies are ordered
++    // against any notification handlers that fire during startup.
++    dispatch_async(g_serialdispatchQueue, ^{
++      requestAll();
++    });
++
+     CFRunLoopRun();
+ 
+     g_mediaRemote.unregisterForNowPlayingNotifications();
