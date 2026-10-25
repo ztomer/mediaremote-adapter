@@ -44,7 +44,7 @@ final class MediaControllerStreamTests: XCTestCase {
         let (controller, recorder) = controller()
         feed(controller, WireFixtures.playing + "\n" + WireFixtures.paused + "\n" + WireFixtures.noPlayer + "\n")
         settle()
-        XCTAssertEqual(recorder.events, [.track("Weightless"), .track("Weightless"), .track(nil)])
+        XCTAssertEqual(recorder.events, [.track("Fixture Tone"), .track("Fixture Tone"), .track(nil)])
         XCTAssertEqual(recorder.tracks.map(\.payload.isPlaying), [true, false])
     }
 
@@ -57,7 +57,7 @@ final class MediaControllerStreamTests: XCTestCase {
         XCTAssertEqual(recorder.events, [], "half a line is not an event")
         feed(controller, String(line[cut...]))
         settle()
-        XCTAssertEqual(recorder.events, [.track("Weightless")])
+        XCTAssertEqual(recorder.events, [.track("Fixture Tone")])
     }
 
     func testByteAtATimeDeliveryStillYieldsEachLine() {
@@ -66,14 +66,14 @@ final class MediaControllerStreamTests: XCTestCase {
             controller.ingest(Data([byte]))
         }
         settle()
-        XCTAssertEqual(recorder.events, [.track(nil), .track("Weightless")])
+        XCTAssertEqual(recorder.events, [.track(nil), .track("Fixture Tone")])
     }
 
     func testBlankLinesAreIgnored() {
         let (controller, recorder) = controller()
         feed(controller, "\n\n" + WireFixtures.playing + "\n\n")
         settle()
-        XCTAssertEqual(recorder.events, [.track("Weightless")])
+        XCTAssertEqual(recorder.events, [.track("Fixture Tone")])
     }
 
     func testMalformedLinesReachOnDecodingErrorWithTheirBytesAndDoNotStopTheStream() {
@@ -81,7 +81,7 @@ final class MediaControllerStreamTests: XCTestCase {
         let lines = [WireFixtures.truncated, WireFixtures.wrongType, WireFixtures.noPayload, WireFixtures.notJSON]
         feed(controller, lines.joined(separator: "\n") + "\n" + WireFixtures.playing + "\n")
         settle()
-        XCTAssertEqual(recorder.events, lines.map(Event.decodingError) + [.track("Weightless")])
+        XCTAssertEqual(recorder.events, lines.map(Event.decodingError) + [.track("Fixture Tone")])
     }
 
     func testAPartialTrailingLineWaitsInTheBufferUntilItsNewline() {
@@ -94,47 +94,68 @@ final class MediaControllerStreamTests: XCTestCase {
         XCTAssertEqual(recorder.events, [.track(nil), .track("Late")])
     }
 
-    // MARK: - artwork downgrade
+    // MARK: - artwork downgrade (the recorded sequences)
+
+    private func artwork(_ line: String) -> String? {
+        WireFixtures.payload(line)["artworkDataBase64"] as? String
+    }
+
+    func testTheWholeRecordedSessionStreamsWithoutADecodingError() {
+        for session in [WireFixtures.bundledSession, WireFixtures.bareSession] {
+            let (controller, recorder) = controller()
+            feed(controller, session.joined(separator: "\n") + "\n")
+            settle()
+            XCTAssertEqual(recorder.events.count, session.count)
+            XCTAssertFalse(recorder.events.contains { if case .decodingError = $0 { true } else { false } })
+            let second = recorder.tracks.filter { $0.payload.title == "Second Tone" }
+            XCTAssertNil(second.first?.payload.artwork, "the new track does not inherit the old art")
+            XCTAssertTrue(second.contains { $0.payload.artwork != nil }, "its own art arrives on a later report")
+        }
+    }
 
     func testArtworkIsKeptWhenTheSameTrackReportsItAgainWithoutArtwork() throws {
         let (controller, recorder) = controller()
-        feed(controller, WireFixtures.withArtwork() + "\n" + WireFixtures.artworkDropped() + "\n")
+        feed(controller, WireFixtures.playing + "\n" + WireFixtures.pausedArtworkPending + "\n")
         settle()
         let second = try XCTUnwrap(recorder.tracks.last)
-        XCTAssertEqual(second.payload.artworkDataBase64, WireFixtures.artworkBase64)
-        XCTAssertEqual(second.payload.artworkMimeType, "image/png")
+        XCTAssertEqual(second.payload.artworkDataBase64, artwork(WireFixtures.playing))
+        XCTAssertEqual(second.payload.artworkMimeType, "image/jpeg")
         XCTAssertNotNil(second.payload.artwork)
-        XCTAssertEqual(second.payload.elapsedTimeMicros, 2_000_000, "everything but the artwork is the NEW report")
+        XCTAssertEqual(second.payload.isPlaying, false, "everything but the artwork is the NEW report")
+        XCTAssertEqual(second.payload.elapsedTimeMicros,
+                       WireFixtures.payload(WireFixtures.pausedArtworkPending)["elapsedTimeMicros"] as? Double)
     }
 
     func testArtworkIsDroppedWhenTheTrackChanges() throws {
         let (controller, recorder) = controller()
-        feed(controller, WireFixtures.withArtwork() + "\n"
-             + WireFixtures.artworkDropped(title: "Other", album: "Other") + "\n")
+        feed(controller, WireFixtures.playing + "\n" + WireFixtures.secondTrackPending + "\n")
         settle()
         let second = try XCTUnwrap(recorder.tracks.last)
-        XCTAssertEqual(second.payload.title, "Other")
+        XCTAssertEqual(second.payload.title, "Second Tone")
         XCTAssertNil(second.payload.artworkDataBase64, "a different track must not inherit the old art")
     }
 
     func testArtworkSurvivesWhenOneSideLeavesTheAlbumEmpty() throws {
         let (controller, recorder) = controller()
-        feed(controller, WireFixtures.withArtwork() + "\n" + WireFixtures.artworkDropped(album: "") + "\n")
+        feed(controller, WireFixtures.secondTrack + "\n" + WireFixtures.artworkRemoved + "\n")
         settle()
-        XCTAssertNotNil(try XCTUnwrap(recorder.tracks.last).payload.artworkDataBase64)
+        XCTAssertEqual(try XCTUnwrap(recorder.tracks.last).payload.artworkDataBase64, artwork(WireFixtures.secondTrack))
     }
 
     func testArtworkIsDroppedWhenBothAlbumsAreSetAndDiffer() throws {
+        // The recording never changes a set album to another set album: the second report is the
+        // recorded pending line with its album edited.
         let (controller, recorder) = controller()
-        feed(controller, WireFixtures.withArtwork() + "\n" + WireFixtures.artworkDropped(album: "Live") + "\n")
+        feed(controller, WireFixtures.playing + "\n"
+             + WireFixtures.edited(WireFixtures.pausedArtworkPending, ["album": "Live"]) + "\n")
         settle()
         XCTAssertNil(try XCTUnwrap(recorder.tracks.last).payload.artworkDataBase64)
     }
 
-    func testALargerArtworkReplacesTheOldOne() throws {
+    func testTheArtworkThatArrivesAfterItsMimeTypeIsDelivered() throws {
         let (controller, recorder) = controller()
-        feed(controller, WireFixtures.artworkDropped() + "\n" + WireFixtures.withArtwork() + "\n")
+        feed(controller, WireFixtures.artworkPending + "\n" + WireFixtures.playing + "\n")
         settle()
-        XCTAssertEqual(try XCTUnwrap(recorder.tracks.last).payload.artworkDataBase64, WireFixtures.artworkBase64)
+        XCTAssertEqual(try XCTUnwrap(recorder.tracks.last).payload.artworkDataBase64, artwork(WireFixtures.playing))
     }
 }

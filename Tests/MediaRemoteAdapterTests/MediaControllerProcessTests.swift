@@ -38,8 +38,10 @@ final class MediaControllerProcessTests: XCTestCase {
 
     func testGetTrackInfoDeliversThePlayingLineOnce() throws {
         let got = try fetch([WireFixtures.playing])
-        XCTAssertEqual(got.info?.payload.title, "Weightless")
-        XCTAssertEqual(got.info?.payload.PID, 1234)
+        XCTAssertEqual(got.info?.payload.title, "Fixture Tone")
+        let recordedPID = (WireFixtures.payload(WireFixtures.playing)["PID"] as? String).flatMap { Int32($0) }
+        XCTAssertNotNil(recordedPID)
+        XCTAssertEqual(got.info?.payload.PID, recordedPID)
         XCTAssertEqual(got.calls, 1)
         XCTAssertEqual(got.fixture.logLines, ["argv get"])
     }
@@ -135,7 +137,7 @@ final class MediaControllerProcessTests: XCTestCase {
             lines: [WireFixtures.playing, WireFixtures.noPlayer, WireFixtures.paused], hold: true, record: record)
         defer { controller.stopListening() }
         fixture.waitUntil("three events") { record.value.count >= 3 }
-        XCTAssertEqual(record.value, ["Weightless", nil, "Weightless"])
+        XCTAssertEqual(record.value, ["Fixture Tone", nil, "Fixture Tone"])
 
         controller.startListening() // already listening: must not spawn a second child
         controller.togglePlayPause()
@@ -151,7 +153,7 @@ final class MediaControllerProcessTests: XCTestCase {
         let terminated = Box(0)
         controller.onListenerTerminated = { terminated.value += 1 }
         fixture.waitUntil("termination callback") { terminated.value > 0 }
-        XCTAssertEqual(record.value, ["Weightless"])
+        XCTAssertEqual(record.value, ["Fixture Tone"])
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         XCTAssertEqual(terminated.value, 1)
 

@@ -27,7 +27,11 @@ let package = Package(
         ),
         .testTarget(
             name: "MediaRemoteAdapterTests",
-            dependencies: ["MediaRemoteAdapter"]
+            dependencies: ["MediaRemoteAdapter"],
+            // Live `run.pl loop` recordings (tools/record_fixtures.sh), read verbatim by WireFixtures.
+            resources: [
+                .copy("Fixtures")
+            ]
         ),
         .target(
             name: "CIMediaRemote",

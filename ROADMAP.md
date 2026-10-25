@@ -23,7 +23,7 @@ history: a pinned revision must stay reachable on the remote. Closed work is in 
   `unsafeFlags`; the shim compiled under ARC, read from the real compile line and object code).
   `Sources/CIMediaRemote/MediaRemoteAdapter.m` (578 lines, upstream-owned) is excluded from the
   500-line cap and held to 578 by `.line-baseline`.
-- 37 tests. Coverage of the Swift target reads 94.0%; the ObjC shim is 0 of 725 lines in
+- 42 tests (also run under TSan by `tools/repo_gates.sh`). Coverage of the Swift target reads 94.0%; the ObjC shim is 0 of 725 lines in
   `MediaRemoteAdapter.m` because it drives the private framework and cannot run headless.
 
 ## Rulings
@@ -44,6 +44,21 @@ M0.2 branch topology (remote operations). M1.1 no `unsafeFlags`, M1.2 tools 6.4,
 `.swift-version` (swiftly's Swift 6.4.0 builds and tests `main` green): `87fc0d8`. M1.3 decoding
 tests + coverage floors: `d64ef36`. M1.4 LICENSE + README: `e01a226`.
 
+## Closed 2026-10-24 (R3.7)
+
+- **(b) The listener race.** TSan (`swift test --sanitize=thread`) reported two races in the
+  existing tests: `eventCount` read on main (the restart check, the termination handler) while the
+  pipe reader's queue wrote it under the lock, and `listeningProcess` read on `commandQueue`
+  (`sendCommand`) while main wrote it (`stopListening`). Every cross-queue field is now under one
+  `stateLock`; the restart decision is taken under it; a late exit of a restarted child no longer
+  nils its replacement (identity check). Gate: `tools/repo_gates.sh` layer 3 runs the suite under
+  TSan, red before the fix, green after.
+- **(a) Recorded fixtures.** The data lines are live `run.pl loop` captures
+  (`tools/record_fixtures.sh` + `tools/fixture-player`, a silent synthetic player), committed
+  verbatim under `Tests/MediaRemoteAdapterTests/Fixtures/`. Still transcribed, with the reason in
+  `WireFixtures.swift`: shuffle/repeat modes (no player here reports them), numeric `PID`/integer
+  `isPlaying` (the shim never prints them), the malformed lines.
+
 ## Open
 
 - **M1.6 remainder: the lint baseline.** 17 entries are left, all in upstream code: `MediaController.swift` (13)
@@ -54,8 +69,12 @@ tests + coverage floors: `d64ef36`. M1.4 LICENSE + README: `e01a226`.
   upstream or for the fork to stop merging it.
 - **M1.1 upstream offer.** Dropping `unsafeFlags` is upstreamable: offer it on PR #7 or a follow-up
   PR (owner's call; it changes the PR upstream reviews).
-- **Recorded fixtures.** `WireFixtures.noPlayer` was recorded live; the data lines are transcribed
-  from the serializer because no player can be driven headless. Replace them with recordings when a
-  real `run.pl loop` capture is taken (`perl run.pl <dylib> loop` with Music playing).
+- **R3.7 upstream offer: the listener race fix.** The `eventCount`/listener lock fix (closed below)
+  is upstream code. A patch against `swift6-macos13` (PR #7's head) is prepared but NOT pushed: a
+  commit there is published into PR #7 (owner's call, same as M1.1's offer).
+- **Artwork MIME vs bytes.** A live capture (2026-10-24, a third-party player, not committed: the
+  owner's listening) reported `artworkMimeType: "image/jpeg"` over TIFF bytes (`TU0AKg` = `MM\0*`).
+  `NSImage` decodes either, so nothing breaks today; a consumer trusting the MIME type would.
+  Next: sniff the magic in the shim's serializer, or document the field as a hint.
 - **LICENSE holders.** The fork line reads `2026, ztomer`; ejbills's Swift package carries no licence
   of its own until PR #8 (or an equivalent) merges. See owner decisions.

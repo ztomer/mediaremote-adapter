@@ -12,48 +12,87 @@ final class TrackInfoDecodingTests: XCTestCase {
     }
 
     func testPlayingLineDecodesEveryField() throws {
-        let payload = try decode(WireFixtures.playing)
-        XCTAssertEqual(payload.title, "Weightless")
-        XCTAssertEqual(payload.artist, "Marconi Union")
-        XCTAssertEqual(payload.album, "Weightless")
+        let line = WireFixtures.playing
+        let wire = WireFixtures.payload(line)
+        let payload = try decode(line)
+        XCTAssertEqual(payload.title, "Fixture Tone")
+        XCTAssertEqual(payload.artist, "mediaremote-adapter")
+        XCTAssertEqual(payload.album, "Recorded Fixtures")
         XCTAssertEqual(payload.isPlaying, true)
-        XCTAssertEqual(payload.durationMicros, 480_000_000)
-        XCTAssertEqual(payload.elapsedTimeMicros, 12_345_678)
-        XCTAssertEqual(payload.timestampEpochMicros, 1_792_800_000_000_000)
-        XCTAssertEqual(payload.applicationName, "Music")
-        XCTAssertEqual(payload.bundleIdentifier, "com.apple.Music")
-        XCTAssertEqual(payload.PID, 1234, "PID arrives as a decimal STRING on the wire")
-        XCTAssertEqual(payload.shuffleMode, .songs)
-        XCTAssertEqual(payload.repeatMode, .all)
+        XCTAssertEqual(payload.durationMicros, 120_000_000)
+        XCTAssertEqual(payload.elapsedTimeMicros, wire["elapsedTimeMicros"] as? Double)
+        XCTAssertEqual(payload.timestampEpochMicros, wire["timestampEpochMicros"] as? Double)
+        XCTAssertEqual(payload.applicationName, "Fixture Player")
+        XCTAssertEqual(payload.bundleIdentifier, "com.ztomer.mediaremote-adapter.fixture-player")
+        let pidString = try XCTUnwrap(wire["PID"] as? String, "PID arrives as a decimal STRING on the wire")
+        XCTAssertEqual(payload.PID, Int32(pidString))
+        XCTAssertNil(payload.shuffleMode, "recorded: null")
+        XCTAssertNil(payload.repeatMode, "recorded: null")
         XCTAssertEqual(payload.playbackRate, 1)
-        XCTAssertNil(payload.artworkDataBase64)
-        XCTAssertNil(payload.artwork)
+        XCTAssertEqual(payload.artworkMimeType, "image/jpeg")
+        XCTAssertNotNil(payload.artwork)
     }
 
     func testPausedLineDecodesAsNotPlaying() throws {
         let payload = try decode(WireFixtures.paused)
         XCTAssertEqual(payload.isPlaying, false)
-        XCTAssertEqual(payload.shuffleMode, .off)
-        XCTAssertEqual(payload.repeatMode, .off)
         XCTAssertEqual(payload.playbackRate, 0)
     }
 
+    func testEveryRecordedLineDecodes() throws {
+        for line in WireFixtures.bundledSession + WireFixtures.bareSession {
+            XCTAssertNoThrow(try decode(line), String(line.prefix(120)))
+        }
+        XCTAssertGreaterThanOrEqual(WireFixtures.bundledSession.count, 5, "the recording lost its subject")
+        XCTAssertGreaterThanOrEqual(WireFixtures.bareSession.count, 3, "the recording lost its subject")
+    }
+
+    func testAPlayerWithoutABundleOmitsItsIdentityKeysAndStillDecodes() throws {
+        let line = WireFixtures.barePlaying
+        let wire = WireFixtures.payload(line)
+        XCTAssertNil(wire["bundleIdentifier"], "recorded: the key is ABSENT, not null")
+        XCTAssertNil(wire["PID"])
+        let payload = try decode(line)
+        XCTAssertEqual(payload.title, "Fixture Tone")
+        XCTAssertNil(payload.bundleIdentifier)
+        XCTAssertNil(payload.applicationName)
+        XCTAssertNil(payload.PID)
+        XCTAssertNotNil(payload.artwork)
+    }
+
+    func testArtworkPendingLineHasAMimeTypeAndNoImage() throws {
+        let payload = try decode(WireFixtures.artworkPending)
+        XCTAssertEqual(payload.artworkMimeType, "image/jpeg", "recorded: the type arrives before the data")
+        XCTAssertNil(payload.artworkDataBase64)
+        XCTAssertNil(payload.artwork)
+    }
+
+    func testShuffleAndRepeatModesDecode() throws {
+        let reported = try decode(WireFixtures.modesReported)
+        XCTAssertEqual(reported.shuffleMode, .songs)
+        XCTAssertEqual(reported.repeatMode, .all)
+        let off = try decode(WireFixtures.modesOff)
+        XCTAssertEqual(off.shuffleMode, .off)
+        XCTAssertEqual(off.repeatMode, .off)
+    }
+
     func testArtworkLineDecodesTheEscapedBase64IntoAnImage() throws {
-        let payload = try decode(WireFixtures.withArtwork())
-        XCTAssertEqual(payload.artworkDataBase64, WireFixtures.artworkBase64,
-                       "the wire's \\/ escapes must come back as plain /")
-        XCTAssertEqual(payload.artworkMimeType, "image/png")
+        let line = WireFixtures.playing
+        XCTAssertTrue(line.contains("\\/"), "the recording holds the wire's \\/ escapes verbatim")
+        let payload = try decode(line)
+        let expected = try XCTUnwrap(WireFixtures.payload(line)["artworkDataBase64"] as? String)
+        XCTAssertTrue(expected.contains("/"))
+        XCTAssertEqual(payload.artworkDataBase64, expected, "the wire's \\/ escapes must come back as plain /")
+        XCTAssertEqual(payload.artworkMimeType, "image/jpeg")
         let image = try XCTUnwrap(payload.artwork, "valid artwork base64 must become an NSImage")
         XCTAssertGreaterThan(image.size.width, 0)
     }
 
     func testUndecodableArtworkBase64LeavesNoImageButStillDecodes() throws {
-        let line = WireFixtures.withArtwork()
-            .replacingOccurrences(of: WireFixtures.artworkBase64.replacingOccurrences(of: "/", with: "\\/"),
-                                  with: "!!not base64!!")
+        let line = WireFixtures.edited(WireFixtures.playing, ["artworkDataBase64": "!!not base64!!"])
         let payload = try decode(line)
         XCTAssertNil(payload.artwork)
-        XCTAssertEqual(payload.title, "Weightless")
+        XCTAssertEqual(payload.title, "Fixture Tone")
     }
 
     func testSparseLineAcceptsNumericPIDAndIntegerPlayerFlag() throws {
@@ -82,23 +121,27 @@ final class TrackInfoDecodingTests: XCTestCase {
     }
 
     func testUniqueIdentifierJoinsTitleArtistAlbum() throws {
-        XCTAssertEqual(try decode(WireFixtures.playing).uniqueIdentifier, "Weightless-Marconi Union-Weightless")
+        XCTAssertEqual(try decode(WireFixtures.playing).uniqueIdentifier,
+                       "Fixture Tone-mediaremote-adapter-Recorded Fixtures")
         XCTAssertEqual(try decode(WireFixtures.sparse).uniqueIdentifier, "Podcast--")
     }
 
     func testEncodeRoundTripKeepsTheWireKeys() throws {
         let info = try JSONDecoder().decode(TrackInfo.self, from: Data(WireFixtures.playing.utf8))
         let again = try JSONDecoder().decode(TrackInfo.self, from: JSONEncoder().encode(info))
-        XCTAssertEqual(again.payload.title, "Weightless")
-        XCTAssertEqual(again.payload.PID, 1234)
-        XCTAssertEqual(again.payload.durationMicros, 480_000_000)
+        XCTAssertEqual(again.payload.title, "Fixture Tone")
+        XCTAssertEqual(again.payload.PID, info.payload.PID)
+        XCTAssertNotNil(again.payload.PID)
+        XCTAssertEqual(again.payload.durationMicros, 120_000_000)
     }
 
     // MARK: - currentElapsedTime
 
     func testElapsedTimeIsFrozenWhenPaused() throws {
         let payload = try decode(WireFixtures.paused)
-        XCTAssertEqual(try XCTUnwrap(payload.currentElapsedTime), 99, accuracy: 0.001)
+        let elapsed = try XCTUnwrap(WireFixtures.payload(WireFixtures.paused)["elapsedTimeMicros"] as? Double)
+        XCTAssertGreaterThan(elapsed, 0, "recorded mid-track")
+        XCTAssertEqual(try XCTUnwrap(payload.currentElapsedTime), elapsed / 1_000_000, accuracy: 0.001)
     }
 
     func testElapsedTimeAdvancesByRateTimesAgeWhilePlaying() {
