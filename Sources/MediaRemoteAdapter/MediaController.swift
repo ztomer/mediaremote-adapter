@@ -153,11 +153,7 @@ public class MediaController: @unchecked Sendable {
     }
 
     public func getTrackInfo(_ onReceive: @escaping (TrackInfo?) -> Void) {
-        guard let scriptPath = perlScriptPath else {
-            onReceive(nil)
-            return
-        }
-        guard let libraryPath = libraryPath else {
+        guard let scriptPath = perlScriptPath, let libraryPath = libraryPath else {
             onReceive(nil)
             return
         }
