@@ -1,7 +1,12 @@
 BSD 3-Clause License
 
 Copyright (c) 2025, Jonas van den Berg and contributors
+Copyright (c) 2025-2026, Ethan (ejbills) and contributors (the Swift package, ejbills/mediaremote-adapter)
 Copyright (c) 2026, ztomer (changes in this fork)
+
+The vendored core under Vendor/ungive-mediaremote-adapter is ungive/mediaremote-adapter, BSD
+3-Clause, Copyright (c) 2025 Jonas van den Berg and contributors; its own LICENSE file is kept
+there unmodified.
 
 Redistribution and use in source and binary forms, with or without
 modification, are permitted provided that the following conditions are met:

@@ -1,18 +1,32 @@
 # MediaRemoteAdapter
 
-A Swift package for macOS that provides a modern interface for controlling media playback and receiving track information from the private `MediaRemote.framework`.
+A Swift package for macOS that reads Now Playing and controls media playback through the private
+`MediaRemote.framework`.
 
 ## This fork
 
-This repository, `ztomer/mediaremote-adapter`, is a fork of [ejbills/mediaremote-adapter](https://github.com/ejbills/mediaremote-adapter) and exists for one consumer: **ZoneWM**, a macOS window manager that reads Now Playing through this package. ZoneWM pins this fork's `main` branch, so `main` is the fork line and its history is never rewritten.
+This repository, `ztomer/mediaremote-adapter`, is the Swift package over
+[ungive/mediaremote-adapter](https://github.com/ungive/mediaremote-adapter)'s core. It exists for
+one consumer: **ZoneWM**, a macOS window manager that reads Now Playing through this package.
+ZoneWM pins this fork's `main` branch, so `main` is the fork line and its history is never
+rewritten.
 
-What the fork carries on top of upstream:
+- **The core is ungive's**, vendored at a pinned commit under
+  [`Vendor/ungive-mediaremote-adapter`](Vendor/ungive-mediaremote-adapter/VENDORED.md): the
+  Objective-C adapter and the Perl script that runs it in the system perl (which macOS lets use
+  MediaRemote; an app is not). [`VENDORED.md`](Vendor/ungive-mediaremote-adapter/VENDORED.md)
+  names the commit, the licence and every local patch, and the pre-push gate proves the tree is
+  exactly upstream plus those patches. It is built by SwiftPM, mapped from ungive's CMake.
+- **The Swift layer is this fork's**, from [ejbills/mediaremote-adapter](https://github.com/ejbills/mediaremote-adapter)
+  (whose own Objective-C copy of the core it replaces): `MediaController`, `TrackInfo` and the
+  commands, over ungive's `stream`, `get`, `send`, `seek`, `shuffle` and `repeat`. It carries the
+  pipe reader that cannot spin a core (`PipeReader`), every cross-queue field under one lock (run
+  under ThreadSanitizer by the gate), and `artworkMimeType` read from the artwork's bytes.
+- Swift 6 language mode, and a macOS 27 deployment floor (it follows ZoneWM's own floor).
+- The tests replay the core's output as recorded live on a Mac playing a silent fixture player
+  (`tools/record_fixtures.sh`), including what each command made that player receive.
 
-- Swift 6 language mode, and a macOS 27 deployment floor (fork-only; it follows ZoneWM's own floor).
-- A fix for a 100% CPU spin: `getTrackInfo` leaked a pipe reader per call that never drained (`PipeReader`).
-- Tests for the wire protocol and `MediaController`, and a build gate.
-
-Upstream-able work goes to the `swift6-macos13` branch, which is the head of upstream pull request [ejbills#7](https://github.com/ejbills/mediaremote-adapter/pull/7) (macOS 13 floor, no fork-only changes). The plan is in [ROADMAP.md](ROADMAP.md).
+The plan is in [ROADMAP.md](ROADMAP.md).
 
 ## Installation
 
@@ -86,11 +100,6 @@ class YourAppController {
     func startBackwardSeek() { mediaController.startBackwardSeek() }
     func endBackwardSeek() { mediaController.endBackwardSeek() }
 
-    // Rating
-    func likeTrack() { mediaController.likeTrack() }
-    func banTrack() { mediaController.banTrack() }
-    func addToWishList() { mediaController.addToWishList() }
-    func removeFromWishList() { mediaController.removeFromWishList() }
 }
 ```
 
@@ -133,10 +142,13 @@ mediaController.getTrackInfo { trackInfo in
 | `goBackFifteenSeconds()` | Skip back 15 seconds |
 | `startForwardSeek()`, `endForwardSeek()` | Continuous forward seek (hold/release) |
 | `startBackwardSeek()`, `endBackwardSeek()` | Continuous backward seek (hold/release) |
-| `likeTrack()` | Like the current track |
-| `banTrack()` | Ban/dislike the current track |
-| `addToWishList()` | Add current track to wish list |
-| `removeFromWishList()` | Remove current track from wish list |
+
+Each command runs the core once (`run.pl <image> send|seek|shuffle|repeat ...`). What each one
+made a real player receive is recorded in `Tests/MediaRemoteAdapterTests/Fixtures/commands.tsv`:
+`toggleShuffle()`, `toggleRepeat()` and the fifteen-second skips reached no MediaPlayer target of
+the fixture player. The like/ban/wish-list commands are gone (none reached a player, one arrived as
+"next track"), and ungive's `speed` is not exposed (the player received rate 1.0 for any value);
+see `Vendor/ungive-mediaremote-adapter/VENDORED.md`.
 
 ### TrackInfo.Payload
 
@@ -148,16 +160,21 @@ mediaController.getTrackInfo { trackInfo in
 | `playbackRate` | `Double?` | 1.0 = playing, 0.0 = paused |
 | `currentElapsedTime` | `TimeInterval?` | **Computed** - real-time position in seconds |
 | `artwork` | `NSImage?` | Decoded once from base64 data at init |
+| `artworkMimeType` | `String?` | The type the artwork's BYTES say (JPEG, PNG, GIF, TIFF, WebP, HEIC, AVIF, BMP); the player's label only for other bytes |
 | `PID` | `pid_t?` | |
-| `shuffleMode` | `ShuffleMode?` | |
+| `shuffleMode` | `ShuffleMode?` | MediaRemote numbers modes from 1; the enums' raw values are MediaPlayer's (from 0) |
 | `repeatMode` | `RepeatMode?` | |
+| `applicationName` | `String?` | The player's name, looked up from its process (the core reports the PID) |
 
 > **Playback position:** `elapsedTimeMicros` is a snapshot from the last state change. Use `currentElapsedTime` to compute an accurate position on demand -- it interpolates from the snapshot using `timestampEpochMicros` and `playbackRate`.
 
 ## License
 
-BSD 3-Clause, the license of the original [ungive/mediaremote-adapter](https://github.com/ungive/mediaremote-adapter). See [LICENSE](LICENSE).
+BSD 3-Clause. See [LICENSE](LICENSE); the vendored core keeps ungive's own
+[LICENSE](Vendor/ungive-mediaremote-adapter/LICENSE).
 
 ## Acknowledgements
 
-This project was originally inspired by [ungive/mediaremote-adapter](https://github.com/ungive/mediaremote-adapter). The core technique of using Perl to access the private framework was pioneered there.
+The core, and the technique of reaching MediaRemote through the system perl, are
+[ungive/mediaremote-adapter](https://github.com/ungive/mediaremote-adapter)'s (Jonas van den Berg
+and contributors). The Swift package began as [ejbills/mediaremote-adapter](https://github.com/ejbills/mediaremote-adapter).

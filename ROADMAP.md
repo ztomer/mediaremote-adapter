@@ -1,83 +1,70 @@
 # mediaremote-adapter (ztomer fork) roadmap
 
 The ONE forward-looking plan for this fork (house rule #16). The fork exists for one consumer:
-ZoneWM. The fork line is `main`; ZoneWM pins `branch: "main"` at `ab2eba8`
-(`ZoneWM/Package.swift:100`, `Package.resolved`, ZoneWM `be486e80`). Never rewrite `main`'s
-history: a pinned revision must stay reachable on the remote. Closed work is in git history; the
-2026-10-12 consolidation record is `git show 66441aa:ROADMAP.md` ("Sources consolidated").
+ZoneWM. The fork line is `main`; ZoneWM pins `branch: "main"` (`ZoneWM/Package.swift:100`,
+`Package.resolved`). Never rewrite `main`'s history: a pinned revision must stay reachable on the
+remote. Closed work is in git history; the 2026-10-12 consolidation record is
+`git show 66441aa:ROADMAP.md`, the ejbills-era plan `git show 008b68d:ROADMAP.md`.
 
 ## Context (measured 2026-10-24)
 
-- **Upstream has not moved.** `ejbills/mediaremote-adapter` HEAD is still `5b6afde` (last push
-  2026-07-31), no tags or releases. Open upstream PRs: #7 (ours, `swift6-macos13`) and #8 (a
-  third party's BSD-3-Clause LICENSE). No other fork is further along on Swift 6 (survey
-  2026-10-12, 17 forks).
-- **Branches** (M0.2 closed 2026-10-24, remote operations, no commit): `main` is the default
-  branch of `ztomer/mediaremote-adapter` and the fork line; `swift6-macos13` is the head of PR #7;
-  `master` mirrors upstream. `origin/test` and local `fork` are deleted. (`git branch -a` also lists
-  `upstream/test`: that is upstream's own branch, not ours.)
-- **Gate:** goh 0.27.0 stock hooks. `tools/gate.sh --full` is GREEN at `e01a226`: structural +
-  SwiftLint `--strict` against the shrink-only `.swiftlint-baseline.json` (17 left, all in
-  upstream-owned code) + cold build/test with warnings as errors + coverage (package floor 39,
-  `MediaRemoteAdapter` target floor 90, `coverage-floors.json`) + `tools/repo_gates.sh` (no
-  `unsafeFlags`; the shim compiled under ARC, read from the real compile line and object code).
-  `Sources/CIMediaRemote/MediaRemoteAdapter.m` (578 lines, upstream-owned) is excluded from the
-  500-line cap and held to 578 by `.line-baseline`.
-- 42 tests (also run under TSan by `tools/repo_gates.sh`). Coverage of the Swift target reads 94.0%; the ObjC shim is 0 of 725 lines in
-  `MediaRemoteAdapter.m` because it drives the private framework and cannot run headless.
+- **The core is ungive's.** `Vendor/ungive-mediaremote-adapter` is
+  [ungive/mediaremote-adapter](https://github.com/ungive/mediaremote-adapter) at `0e82bf1`
+  (master, 2026-10-17) plus four local patches, all listed in its
+  [VENDORED.md](Vendor/ungive-mediaremote-adapter/VENDORED.md): 0001 is ungive's open PR #38
+  (stream ordering), 0002 no load-time side effects in a host app, 0003 the script loads an image
+  path, 0004 `stream --exit-with-parent`. The Swift layer (MediaController, TrackInfo, PipeReader,
+  the commands) is the fork's, from ejbills's package; ejbills's diverged ObjC copy of the core is
+  gone.
+- **Upstreams.** ungive is maintained (seek/speed #34, fractional rates #31, artworkMimeType with
+  artworkData #36, `--no-artwork` #29, `--allow-missing-title` #40, missing PID #16, since April).
+  `ejbills/mediaremote-adapter` HEAD is still `5b6afde` (2026-07-31); its open PRs are #7 (ours,
+  `swift6-macos13`) and #8 (a third party's LICENSE). Owner ruling: nothing is posted upstream.
+- **Branches.** `main` is the default branch and the fork line; `swift6-macos13` is the head of
+  ejbills PR #7; `master` mirrors ejbills.
+- **Gate:** goh 0.27.0 stock hooks. `tools/gate.sh --full` is GREEN at the vendoring commits:
+  structural (with `GOH_EXCLUDE='^Vendor/'`) + SwiftLint `--strict` against the shrink-only
+  `.swiftlint-baseline.json` (8 left, all in ejbills-era Swift) + cold build/test with warnings
+  as errors + coverage (package floor 26, `MediaRemoteAdapter` target floor 90, reads 94.0) +
+  `tools/repo_gates.sh`: no `unsafeFlags`; the core compiled under ARC (compile line and object
+  code); the core's load-time initializers only in an allowlist; `tools/check_vendored.sh` (the
+  tree is upstream plus the listed patches, run.pl is the vendored script); the suite under TSan.
+- 55 tests. Fixtures are live captures of the vendored core against `tools/fixture-player`
+  (`tools/record_fixtures.sh`), including `commands.tsv`: what every command argv made the player
+  receive.
 
 ## Rulings
 
-- The floor follows the ZoneWM root package (`7e6aef7`, 2026-09-14). The floor raise is FORK-ONLY.
-- Not Rust: private ObjC shim, `../RUSTIFICATION_ROADMAP.md` §6.
-- **2026-10-12, PR #7: "split, see if there's an updated upstream".** Keep upstreaming. PR #7 carries
-  only what upstream can accept (Swift 6 + macOS 13 floor + the CPU spin fix). The floor raise and
-  everything fork-only live on `main`.
-- A commit pushed to `swift6-macos13` is published into upstream PR #7. Fork-only work goes to `main`.
-- `swift6-macos13` may be rewritten (force-with-lease) only while `main` contains every commit a
-  consumer pins. Never leave a pinned revision unreachable on the remote. ZoneWM pins
-  `branch: "main"` (`ZoneWM/Package.swift:100`); never rewrite `main`'s history.
-
-## Closed 2026-10-24 (phases 1 and 2)
-
-M0.2 branch topology (remote operations). M1.1 no `unsafeFlags`, M1.2 tools 6.4, M1.5 no
-`.swift-version` (swiftly's Swift 6.4.0 builds and tests `main` green): `87fc0d8`. M1.3 decoding
-tests + coverage floors: `d64ef36`. M1.4 LICENSE + README: `e01a226`.
-
-## Closed 2026-10-24 (R3.7)
-
-- **(b) The listener race.** TSan (`swift test --sanitize=thread`) reported two races in the
-  existing tests: `eventCount` read on main (the restart check, the termination handler) while the
-  pipe reader's queue wrote it under the lock, and `listeningProcess` read on `commandQueue`
-  (`sendCommand`) while main wrote it (`stopListening`). Every cross-queue field is now under one
-  `stateLock`; the restart decision is taken under it; a late exit of a restarted child no longer
-  nils its replacement (identity check). Gate: `tools/repo_gates.sh` layer 3 runs the suite under
-  TSan, red before the fix, green after.
-- **(a) Recorded fixtures.** The data lines are live `run.pl loop` captures
-  (`tools/record_fixtures.sh` + `tools/fixture-player`, a silent synthetic player), committed
-  verbatim under `Tests/MediaRemoteAdapterTests/Fixtures/`. Still transcribed, with the reason in
-  `WireFixtures.swift`: shuffle/repeat modes (no player here reports them), numeric `PID`/integer
-  `isPlaying` (the shim never prints them), the malformed lines.
+- **2026-10-24, the core:** "Yes: vendor ungive's current adapter as the fork's core, keep our
+  Swift layer on top, apply PR #38's ordering locally, re-record the fixtures, and release for
+  ZoneWM. Don't post anything upstream."
+- The floor follows the ZoneWM root package (`7e6aef7`, 2026-09-14), fork-only.
+- Not Rust: private ObjC core, `../RUSTIFICATION_ROADMAP.md` §6.
+- A commit pushed to `swift6-macos13` is published into ejbills PR #7. Fork-only work goes to
+  `main`. `swift6-macos13` may be rewritten (force-with-lease) only while `main` contains every
+  commit a consumer pins.
+- Releases are tags on `main` (`v0.1.0` is the first: the Swift package over ungive's core).
 
 ## Open
 
-- **M1.6 remainder: the lint baseline.** 17 entries are left, all in upstream code: `MediaController.swift` (13)
-  and `TrackInfo.swift` (4). Fork-authored entries on `main` are fixed; the same
-  fixes (`Package.swift` trailing comma/newline/whitespace, `PipeReaderTests`) have NOT been mirrored
-  onto `swift6-macos13`, because a commit there is published into upstream PR #7. Mirror them with the
-  next real change to that branch, or decide to leave PR #7 alone. The upstream-owned entries wait for
-  upstream or for the fork to stop merging it.
-- **M1.1 upstream offer.** Dropping `unsafeFlags` is upstreamable: offer it on PR #7 or a follow-up
-  PR (owner's call; it changes the PR upstream reviews).
-- **R3.7 upstream offer: the listener race fix.** The `eventCount`/listener lock fix (closed below)
-  is upstream code. `upstream-patches/swift6-macos13-0001-listener-race.patch` applies to
-  `swift6-macos13` (PR #7's head, `8e40638`; `git am`), builds there, and keeps the macOS 13 floor
-  (lock()/unlock(), no `NSLock.withLock`). NOT pushed: a commit there is published into PR #7
-  (owner's call, same as M1.1's offer). That branch has no listener test seam, so its TSan proof is
-  the fork's: the same races, red then green, on `main`. Delete the file once offered or declined.
-- **Artwork MIME vs bytes.** A live capture (2026-10-24, a third-party player, not committed: the
-  owner's listening) reported `artworkMimeType: "image/jpeg"` over TIFF bytes (`TU0AKg` = `MM\0*`).
-  `NSImage` decodes either, so nothing breaks today; a consumer trusting the MIME type would.
-  Next: sniff the magic in the shim's serializer, or document the field as a hint.
-- **LICENSE holders.** The fork line reads `2026, ztomer`; ejbills's Swift package carries no licence
-  of its own until PR #8 (or an equivalent) merges. See owner decisions.
+- **Re-vendor when ungive moves.** Bump: export the new commit's files, re-record
+  `upstream.sha256`, re-apply the patches (drop 0001 when PR #38 merges), re-run
+  `tools/record_fixtures.sh` and the gate. `tools/check_vendored.sh` refuses a half-done bump.
+- **ungive's `speed` does nothing on macOS 27.** The fixture player received playback rate 1.0 for
+  every value, with the function pointer declared int, float or double. Not exposed. Next: find
+  the real signature/semantics (it may take an MRPlaybackSpeed enum), then expose it.
+- **Toggle shuffle/repeat and the 15-second skips reach no MediaPlayer target** of the fixture
+  player (`commands.tsv`). Same MRCommand ids as before; unknown whether a native MediaRemote
+  player acts on them. Next: record them against Music.app before deciding whether they stay.
+- **Shuffle/repeat reporting is transcribed.** No player here reports a mode in Now Playing, the
+  fixture player included. A capture from a player that does (Music.app) would replace
+  `modesReported`.
+- **ZoneWM's licence inventory is stale** (ZoneWM's lane, not edited here): `ZTUI/LicenseTexts.swift`
+  lists Cykey's `MediaRemote.h` as shipped inside this package and links ejbills; the package now
+  ships ungive's core (BSD-3, Jonas van den Berg) and no Cykey header.
+- **ejbills PR #7 offers (owner's call, nothing posted).** `upstream-patches/swift6-macos13-0001-listener-race.patch`
+  (the stateLock fix for PR #7's head) and dropping `unsafeFlags` (M1.1) are still unoffered.
+  `main` no longer shares its core with ejbills, so PR #7 is the only thing left that tracks them.
+  Delete the patch file once offered or declined.
+- **The lint baseline:** 8 entries, all in ejbills-era Swift (`MediaController.swift`,
+  `TrackInfo.swift`); `main` no longer merges ejbills, so they can be fixed here.
