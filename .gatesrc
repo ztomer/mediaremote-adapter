@@ -42,3 +42,7 @@ GOH_BARE_PYTHON_MIN_FILES=5           # read 6
 GOH_MD_LINKS_MIN_LINKS=1              # read 1
 GOH_TAP_WRITES_MIN_FILES=7            # read 8
 GOH_BUSY_LOOP_MIN_FILES=6             # read 7
+
+# A commit that ADDS a test names, in a `Red-run:` trailer, the mutation that
+# turned that test red (goh red-run, BACKLOG 4.11; owner OW.8, 2026-10-31).
+GOH_RED_RUN=1
