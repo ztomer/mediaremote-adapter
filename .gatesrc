@@ -46,3 +46,6 @@ GOH_BUSY_LOOP_MIN_FILES=6             # read 7
 # A commit that ADDS a test names, in a `Red-run:` trailer, the mutation that
 # turned that test red (goh red-run, BACKLOG 4.11; owner OW.8, 2026-10-31).
 GOH_RED_RUN=1
+
+# Roadmap file the goh roadmap gate checks (GOH.ROADMAPREQ).
+GOH_ROADMAP=ROADMAP.md
